@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ad Campaign Report Generator</title>
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f0f1a;
+      color: #e8e0ff;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #1a1a2e;
+      border: 1px solid #2e2e50;
+      border-radius: 16px;
+      padding: 40px;
+      width: 100%;
+      max-width: 560px;
+      box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #e8e0ff;
+      margin-bottom: 6px;
+    }
+
+    .subtitle {
+      font-size: 0.875rem;
+      color: #9b8fc0;
+      margin-bottom: 32px;
+    }
+
+    /* ── Upload zones ── */
+    .upload-group {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+
+    .upload-zone {
+      border: 2px dashed #3a3a60;
+      border-radius: 12px;
+      padding: 24px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+
+    .upload-zone:hover,
+    .upload-zone.dragover {
+      border-color: #7c6af7;
+      background: rgba(124, 106, 247, 0.06);
+    }
+
+    .upload-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    .zone-label {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+
+    .zone-label.file1 {
+      background: #312b5a;
+      color: #a99ef5;
+    }
+
+    .zone-label.file2 {
+      background: #1e3040;
+      color: #6bbcdc;
+    }
+
+    .zone-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #d4ccff;
+      margin-bottom: 4px;
+    }
+
+    .zone-desc {
+      font-size: 0.8rem;
+      color: #7a6fa0;
+    }
+
+    .zone-filename {
+      margin-top: 10px;
+      font-size: 0.8rem;
+      color: #a99ef5;
+      font-weight: 500;
+      display: none;
+    }
+
+    .upload-zone.has-file .zone-filename {
+      display: block;
+    }
+
+    .upload-zone.has-file {
+      border-color: #5a4fcf;
+      background: rgba(90, 79, 207, 0.08);
+    }
+
+    .upload-zone.file2-zone.has-file {
+      border-color: #3a8ab0;
+      background: rgba(58, 138, 176, 0.08);
+    }
+
+    /* ── App URL Input ── */
+    .app-input-container {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .app-input-container label {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #a99ef5;
+    }
+
+    textarea#appUrlInput {
+      width: 100%;
+      height: 80px;
+      background: #0f0f1a;
+      border: 1px solid #3a3a60;
+      border-radius: 8px;
+      padding: 12px;
+      color: #e8e0ff;
+      font-family: inherit;
+      resize: vertical;
+    }
+
+    textarea#appUrlInput:focus {
+      outline: none;
+      border-color: #7c6af7;
+    }
+
+    /* ── Button ── */
+    button#generateBtn {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #6a5af9, #9b59f5);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+
+    button#generateBtn:hover:not(:disabled) {
+      opacity: 0.9;
+      transform: translateY(-1px);
+    }
+
+    button#generateBtn:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    button#generateBtn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* ── Status ── */
+    #status-area {
+      margin-top: 24px;
+      display: none;
+    }
+
+    .status-bar {
+      height: 4px;
+      background: #2e2e50;
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+
+    .status-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      background: linear-gradient(90deg, #6a5af9, #9b59f5);
+      width: 0%;
+      transition: width 0.4s ease;
+    }
+
+    .status-text {
+      font-size: 0.875rem;
+      color: #9b8fc0;
+      text-align: center;
+      margin-bottom: 16px;
+    }
+
+    /* ── Info pills ── */
+    .info-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .pill {
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: #252545;
+      color: #a99ef5;
+      border: 1px solid #3a3a60;
+    }
+
+    .pill.success {
+      background: #1e3530;
+      color: #4fcf99;
+      border-color: #2a5048;
+    }
+
+    .pill.warn {
+      background: #3a2e1a;
+      color: #d4a83a;
+      border-color: #604d20;
+    }
+
+    /* ── Download button ── */
+    #downloadBtn {
+      display: none;
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #1d8a5a, #27c97a);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+      text-align: center;
+      text-decoration: none;
+    }
+
+    #downloadBtn:hover {
+      opacity: 0.9;
+    }
+
+    .error-box {
+      background: #e6c5c5;
+      border: 1px solid #7a3030;
+      color: #f08080;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 0.85rem;
+      display: none;
+      margin-top: 12px;
+    }
+
+    .reset-link {
+      display: block;
+      text-align: center;
+      margin-top: 16px;
+      font-size: 0.8rem;
+      color: #ffffff;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="card">
+    <h1>📊 Final_Report_Generator</h1>
+    <p class="subtitle">Upload your campaign data files to generate a formatted Excel report.</p>
+
+    <div class="upload-group">
+
+      <!-- File 1 -->
+      <div class="upload-zone" id="zone1" ondragover="handleDrag(event,'zone1')" ondragleave="handleDragLeave('zone1')"
+        ondrop="handleDrop(event,'file1Input','zone1')">
+        <input type="file" id="file1Input" accept=".csv,.xlsx,.xls"
+          onchange="handleFileSelect('file1Input','zone1','fname1')" />
+        <span class="zone-label file1">File 1 — Required</span>
+        <div class="zone-title">Primary Campaign Data</div>
+        <div class="zone-desc">Impressions, Clicks, Date, etc. (.csv / .xlsx)</div>
+        <div class="zone-filename" id="fname1"></div>
+      </div>
+
+      <!-- File 2 -->
+      <div class="upload-zone file2-zone" id="zone2" ondragover="handleDrag(event,'zone2')"
+        ondragleave="handleDragLeave('zone2')" ondrop="handleDrop(event,'file2Input','zone2')">
+        <input type="file" id="file2Input" accept=".csv,.xlsx,.xls"
+          onchange="handleFileSelect('file2Input','zone2','fname2')" />
+        <span class="zone-label file2">File 2 — Optional</span>
+        <div class="zone-title">City / Line Item Data</div>
+        <div class="zone-desc">Must contain a <strong>City</strong> column and Line Item column. Generates Sheet 8.
+        </div>
+        <div class="zone-filename" id="fname2"></div>
+      </div>
+
+      <!-- App / URLs Input -->
+      <div class="app-input-container">
+        <label for="appUrlInput">Screenshot_APP/URL's</label>
+        <textarea id="appUrlInput" placeholder="e.g. facebook.com&#10;youtube.com"></textarea>
+      </div>
+
+    </div>
+
+    <button id="generateBtn" onclick="generate()">Generate Report</button>
+
+    <div id="status-area">
+      <div class="status-bar">
+        <div class="status-bar-fill" id="progressBar"></div>
+      </div>
+      <div class="status-text" id="statusText">Processing…</div>
+      <div class="info-pills" id="infoPills"></div>
+      <button id="downloadBtn" onclick="triggerDownload()">⬇ Download Report</button>
+      <div class="error-box" id="errorBox"></div>
+      <span class="reset-link" onclick="resetForm()">← Start over</span>
+    </div>
+  </div>
+
+  <script>
+    const API = "http://localhost:5000";
+    let currentJobId = null;
+    let pollTimer = null;
+
+    // ── Drag & drop helpers ────────────────────────────────────────────────────
+    function handleDrag(e, zoneId) {
+      e.preventDefault();
+      document.getElementById(zoneId).classList.add("dragover");
+    }
+    function handleDragLeave(zoneId) {
+      document.getElementById(zoneId).classList.remove("dragover");
+    }
+    function handleDrop(e, inputId, zoneId) {
+      e.preventDefault();
+      document.getElementById(zoneId).classList.remove("dragover");
+      const files = e.dataTransfer.files;
+      if (files.length) {
+        const input = document.getElementById(inputId);
+        // DataTransfer trick to set files on input
+        const dt = new DataTransfer();
+        dt.items.add(files[0]);
+        input.files = dt.files;
+        input.dispatchEvent(new Event("change"));
+      }
+    }
+    function handleFileSelect(inputId, zoneId, fnameId) {
+      const input = document.getElementById(inputId);
+      const zone = document.getElementById(zoneId);
+      const fname = document.getElementById(fnameId);
+      if (input.files.length) {
+        fname.textContent = "📎 " + input.files[0].name;
+        zone.classList.add("has-file");
+      } else {
+        fname.textContent = "";
+        zone.classList.remove("has-file");
+      }
+    }
+
+    // ── Generate ───────────────────────────────────────────────────────────────
+    async function generate() {
+      const file1 = document.getElementById("file1Input").files[0];
+      if (!file1) { alert("Please select File 1 (Primary Campaign Data)."); return; }
+
+      const btn = document.getElementById("generateBtn");
+      btn.disabled = true;
+
+      const formData = new FormData();
+      formData.append("file", file1);
+
+      const file2 = document.getElementById("file2Input").files[0];
+      if (file2) formData.append("file2", file2);
+
+      const appUrls = document.getElementById("appUrlInput").value;
+      if (appUrls) formData.append("app_urls", appUrls.trim());
+
+      setStatus("Uploading files…", 10);
+      showStatusArea();
+
+      try {
+        const res = await fetch(`${API}/upload`, { method: "POST", body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Upload failed");
+        currentJobId = data.job_id;
+        setStatus("Files uploaded. Processing…", 25);
+        pollTimer = setInterval(pollStatus, 1500);
+      } catch (err) {
+        showError(err.message);
+        btn.disabled = false;
+      }
+    }
+
+    // ── Poll ───────────────────────────────────────────────────────────────────
+    async function pollStatus() {
+      try {
+        const res = await fetch(`${API}/status/${currentJobId}`);
+        if (res.status === 404) {
+          clearInterval(pollTimer);
+          showError("Job lost (server restarted). Please refresh and try again.");
+          document.getElementById("generateBtn").disabled = false;
+          return;
+        }
+
+        const data = await res.json();
+
+        if (data.status === "processing") {
+          setStatus("Building report sheets…", 60);
+        } else if (data.status === "done") {
+          clearInterval(pollTimer);
+          setStatus("Report ready!", 100);
+
+          if (data.city_info) {
+            showInfoPills(data.city_info);
+          }
+          document.getElementById("downloadBtn").style.display = "block";
+        } else if (data.status === "error") {
+          clearInterval(pollTimer);
+          showError(data.error || "Unknown error");
+          document.getElementById("generateBtn").disabled = false;
+        }
+      } catch (err) {
+        clearInterval(pollTimer);
+        showError("Lost connection to server.");
+        document.getElementById("generateBtn").disabled = false;
+      }
+    }
+
+    function showInfoPills(info) {
+      const container = document.getElementById("infoPills");
+      container.innerHTML = "";
+
+      if (info.matched_line_items !== undefined) {
+        addPill(container, `✓ ${info.matched_line_items} matched line items`, "success");
+      }
+      if (info.cities_found !== undefined) {
+        addPill(container, `🏙 ${info.cities_found} unique cities`, "success");
+      }
+      if (info.warnings && info.warnings.length) {
+        info.warnings.forEach(w => addPill(container, `⚠ ${w}`, "warn"));
+      }
+    }
+
+    function addPill(container, text, type) {
+      const p = document.createElement("div");
+      p.className = `pill ${type}`;
+      p.textContent = text;
+      container.appendChild(p);
+    }
+
+    // ── Download ───────────────────────────────────────────────────────────────
+    function triggerDownload() {
+      window.location.href = `${API}/download/${currentJobId}`;
+    }
+
+    // ── UI helpers ─────────────────────────────────────────────────────────────
+    function showStatusArea() {
+      document.getElementById("status-area").style.display = "block";
+    }
+
+    function setStatus(msg, progress) {
+      document.getElementById("statusText").textContent = msg;
+      document.getElementById("progressBar").style.width = progress + "%";
+    }
+
+    function showError(msg) {
+      const box = document.getElementById("errorBox");
+      box.textContent = "Error: " + msg;
+      box.style.display = "block";
+      setStatus("Something went wrong.", 0);
+    }
+
+    function resetForm() {
+      clearInterval(pollTimer);
+      currentJobId = null;
+      document.getElementById("file1Input").value = "";
+      document.getElementById("file2Input").value = "";
+      document.getElementById("zone1").classList.remove("has-file");
+      document.getElementById("zone2").classList.remove("has-file");
+      document.getElementById("fname1").textContent = "";
+      document.getElementById("fname2").textContent = "";
+      document.getElementById("appUrlInput").value = "";
+      document.getElementById("status-area").style.display = "none";
+      document.getElementById("downloadBtn").style.display = "none";
+      document.getElementById("errorBox").style.display = "none";
+      document.getElementById("infoPills").innerHTML = "";
+      document.getElementById("generateBtn").disabled = false;
+      setStatus("Processing…", 0);
+    }
+  </script>
+</body>
+
+</html>
