@@ -1,0 +1,1422 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Final Report Generator</title>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@400;600;700;800;900&display=swap"
+    rel="stylesheet">
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --pink: #FF2D78;
+      --yellow: #FFE000;
+      --teal: #00CFC1;
+      --orange: #FF6B2B;
+      --purple: #7B2FFF;
+      --lime: #C8FF3E;
+      --cream: #FFF9F0;
+      --dark: #1A0A2E;
+      --card-bg: #ffffff;
+    }
+
+    body {
+      font-family: 'Nunito', sans-serif;
+      background: var(--cream);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 0 0 60px;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    /* ── Wavy hero banner ── */
+    .hero {
+      width: 100%;
+      background: linear-gradient(135deg, var(--purple) 0%, var(--pink) 50%, var(--orange) 100%);
+      padding: 48px 24px 80px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Animated bubble circles in hero */
+    .hero-bubble {
+      position: absolute;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      animation: floatBubble linear infinite;
+    }
+
+    @keyframes floatBubble {
+      0% {
+        transform: translateY(100%) scale(0.5);
+        opacity: 0;
+      }
+
+      20% {
+        opacity: 1;
+      }
+
+      80% {
+        opacity: 0.6;
+      }
+
+      100% {
+        transform: translateY(-120px) scale(1.2);
+        opacity: 0;
+      }
+    }
+
+    /* Hero shine sweep */
+    .hero::after {
+      content: '';
+      position: absolute;
+      top: -50%;
+      left: -60%;
+      width: 40%;
+      height: 200%;
+      background: rgba(255, 255, 255, 0.08);
+      transform: skewX(-20deg);
+      animation: heroShine 4s ease-in-out infinite;
+    }
+
+    @keyframes heroShine {
+
+      0%,
+      100% {
+        left: -60%;
+      }
+
+      50% {
+        left: 120%;
+      }
+    }
+
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.2);
+      border: 1.5px solid rgba(255, 255, 255, 0.35);
+      border-radius: 999px;
+      padding: 5px 16px;
+      font-size: 0.72rem;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 18px;
+    }
+
+    .hero-title {
+      font-family: 'Fredoka One', cursive;
+      font-size: clamp(2.4rem, 6vw, 3.8rem);
+      color: #fff;
+      line-height: 1.1;
+      letter-spacing: 0.01em;
+      text-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+      margin-bottom: 12px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-title span {
+      color: var(--yellow);
+      -webkit-text-stroke: 2px rgba(0, 0, 0, 0.1);
+    }
+
+    .hero-sub {
+      font-size: 1rem;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.85);
+      max-width: 420px;
+      margin: 0 auto;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* SVG wave divider */
+    .wave-divider {
+      width: 100%;
+      overflow: hidden;
+      line-height: 0;
+      margin-top: -2px;
+    }
+
+    .wave-divider svg {
+      display: block;
+      width: 100%;
+    }
+
+    /* ── Flavor chips (stats row) ── */
+    .flavor-row {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin: -28px auto 32px;
+      padding: 0 20px;
+      position: relative;
+      z-index: 10;
+      max-width: 640px;
+    }
+
+    .flavor-chip {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      background: #fff;
+      border-radius: 999px;
+      padding: 8px 18px;
+      font-size: 0.8rem;
+      font-weight: 800;
+      color: var(--dark);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1), 0 0 0 2px var(--chip-color);
+      transition: transform 0.2s;
+    }
+
+    .flavor-chip:hover {
+      transform: translateY(-2px) scale(1.03);
+    }
+
+    .chip-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--chip-color);
+    }
+
+    /* ── Main content ── */
+    .content {
+      width: 100%;
+      padding: 20px 40px 100px;
+      box-sizing: border-box;
+    }
+
+    /* ── Section title ── */
+    .section-title {
+      font-family: 'Fredoka One', cursive;
+      font-size: 1.4rem;
+      color: var(--dark);
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .section-title::after {
+      content: '';
+      flex: 1;
+      height: 3px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--pink), transparent);
+    }
+
+    /* ── Card ── */
+    .card {
+      background: #fff;
+      border-radius: 24px;
+      padding: 28px;
+      margin-bottom: 20px;
+      box-shadow: 0 6px 32px rgba(0, 0, 0, 0.08), 0 0 0 2px rgba(0, 0, 0, 0.04);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card-accent {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+    }
+
+    /* ── Upload zones ── */
+    .upload-zone {
+      border: 2.5px dashed #e0d8f0;
+      border-radius: 18px;
+      padding: 22px 20px;
+      cursor: pointer;
+      position: relative;
+      transition: all 0.25s ease;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 14px;
+      background: #fafafa;
+    }
+
+    .upload-zone:last-of-type {
+      margin-bottom: 0;
+    }
+
+    .upload-zone:hover {
+      border-color: var(--pink);
+      background: #FFF5F9;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(255, 45, 120, 0.12);
+    }
+
+    .upload-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    .zone-emoji {
+      width: 54px;
+      height: 54px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.6rem;
+      flex-shrink: 0;
+    }
+
+    .zone-emoji.p {
+      background: linear-gradient(135deg, #FFE5EE, #FFCCE0);
+    }
+
+    .zone-emoji.s {
+      background: linear-gradient(135deg, #E0F9F8, #BFFAF8);
+    }
+
+    .zone-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .zone-title {
+      font-size: 0.92rem;
+      font-weight: 800;
+      color: var(--dark);
+      margin-bottom: 2px;
+    }
+
+    .zone-desc {
+      font-size: 0.76rem;
+      color: #888;
+      font-weight: 600;
+    }
+
+    .zone-filename {
+      margin-top: 5px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--pink);
+      display: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .upload-zone.has-file .zone-filename {
+      display: block;
+    }
+
+    .upload-zone.has-file {
+      border-color: var(--pink);
+      border-style: solid;
+      background: #FFF0F5;
+    }
+
+    .upload-zone.file2-zone.has-file {
+      border-color: var(--teal);
+      background: #F0FFFE;
+    }
+
+    .upload-zone.file2-zone.has-file .zone-filename {
+      color: var(--teal);
+    }
+
+    .upload-zone.file2-zone:hover {
+      border-color: var(--teal);
+      background: #F0FFFE;
+      box-shadow: 0 8px 24px rgba(0, 207, 193, 0.12);
+    }
+
+    .zone-badge {
+      font-size: 0.65rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 4px 12px;
+      border-radius: 999px;
+      flex-shrink: 0;
+    }
+
+    .zone-badge.req {
+      background: #FFE5EE;
+      color: var(--pink);
+    }
+
+    .zone-badge.opt {
+      background: #E0F9F8;
+      color: #009E94;
+    }
+
+    /* ── URL input ── */
+    .url-box {
+      border: 2.5px solid #EEE;
+      border-radius: 18px;
+      padding: 18px 20px;
+      background: #fafafa;
+      transition: border-color 0.2s;
+      margin-bottom: 0;
+    }
+
+    .url-box:focus-within {
+      border-color: var(--orange);
+      background: #FFF9F5;
+    }
+
+    .url-label {
+      font-size: 0.8rem;
+      font-weight: 800;
+      color: var(--orange);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    textarea {
+      width: 100%;
+      height: 68px;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--dark);
+      font-family: 'Nunito', sans-serif;
+      font-size: 0.85rem;
+      font-weight: 600;
+      resize: none;
+      line-height: 1.7;
+    }
+
+    textarea::placeholder {
+      color: #bbb;
+    }
+
+    /* ── Language selector ── */
+    .lang-row {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+      margin-top: 4px;
+    }
+
+    #languageSelect,
+    #modeSelect {
+      flex: 1;
+      min-width: 0;
+      background: #fff;
+      border: 2px solid #eee;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-family: 'Nunito', sans-serif;
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--dark);
+      outline: none;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    #languageSelect:focus,
+    #languageSelect:hover {
+      border-color: var(--teal);
+      background: #F0FFFE;
+    }
+
+    #modeSelect:focus,
+    #modeSelect:hover {
+      border-color: var(--pink);
+      background: #FFF5F8;
+    }
+
+    .lang-btn {
+      border: none;
+      border-radius: 12px;
+      padding: 0 14px;
+      font-family: 'Nunito', sans-serif;
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.2s, opacity 0.2s;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .lang-btn.add {
+      background: linear-gradient(135deg, var(--teal), #00A8A0);
+      color: #fff;
+      box-shadow: 0 3px 12px rgba(0, 207, 193, 0.3);
+    }
+
+    .lang-btn.remove {
+      background: #FFF0F0;
+      color: #D00;
+      box-shadow: 0 3px 10px rgba(255, 45, 120, 0.12);
+    }
+
+    .lang-btn:hover {
+      transform: translateY(-2px);
+    }
+
+    .lang-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .lang-hint {
+      font-size: 0.72rem;
+      color: #999;
+      font-weight: 600;
+      margin-top: 6px;
+    }
+
+    .lang-box {
+      margin-bottom: 14px;
+    }
+
+    /* ── Generate button ── */
+    .btn-generate {
+      width: 100%;
+      padding: 18px;
+      background: linear-gradient(135deg, var(--pink), var(--orange));
+      color: #fff;
+      font-family: 'Fredoka One', cursive;
+      font-size: 1.25rem;
+      font-weight: 400;
+      letter-spacing: 0.04em;
+      border: none;
+      border-radius: 18px;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+      transition: all 0.25s ease;
+      box-shadow: 0 8px 28px rgba(255, 45, 120, 0.35), 0 2px 0 rgba(0, 0, 0, 0.1) inset;
+      margin-top: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .btn-generate::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+      transition: left 0.5s ease;
+    }
+
+    .btn-generate:hover::after {
+      left: 100%;
+    }
+
+    .btn-generate:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 14px 36px rgba(255, 45, 120, 0.45);
+    }
+
+    .btn-generate:active {
+      transform: translateY(-1px);
+    }
+
+    .btn-generate:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    /* fizz dots on button */
+    .btn-fizz {
+      font-size: 1.1rem;
+      animation: spin 3s linear infinite;
+    }
+
+    @keyframes spin {
+      100% {
+        transform: rotate(360deg);
+      }
+    }
+
+    /* ── Status area ── */
+    #status-area {
+      margin-top: 20px;
+      display: none;
+    }
+
+    .progress-label {
+      font-size: 0.78rem;
+      font-weight: 800;
+      color: var(--dark);
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .progress-track {
+      background: #F0EEF8;
+      border-radius: 999px;
+      height: 10px;
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--pink), var(--orange), var(--yellow));
+      background-size: 200% 100%;
+      width: 0%;
+      transition: width 0.4s ease;
+      animation: gradientShift 2s linear infinite;
+    }
+
+    @keyframes gradientShift {
+      0% {
+        background-position: 0% 0%;
+      }
+
+      100% {
+        background-position: 200% 0%;
+      }
+    }
+
+    .status-text {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: #666;
+      text-align: center;
+      margin-bottom: 14px;
+    }
+
+    .info-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .pill {
+      font-size: 0.73rem;
+      font-weight: 800;
+      padding: 5px 14px;
+      border-radius: 999px;
+    }
+
+    .pill.success {
+      background: #DDFBF0;
+      color: #00875A;
+    }
+
+    .pill.warn {
+      background: #FFF4D4;
+      color: #B76E00;
+    }
+
+    /* ── Custom Multi-select Search Box ── */
+    .search-select-container {
+      background: #fff;
+      border: 2px solid #eee;
+      border-radius: 18px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .search-input-wrapper {
+      padding: 12px;
+      border-bottom: 1px solid #eee;
+      background: #fafafa;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .search-input-wrapper i { color: #aaa; font-size: 0.9rem; }
+    
+    .search-input-wrapper input {
+      border: none;
+      background: transparent;
+      width: 100%;
+      font-size: 0.9rem;
+      font-family: inherit;
+      outline: none;
+    }
+
+    .options-list {
+      max-height: 200px;
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    .option-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #444;
+    }
+
+    .option-item:hover { background: #f5f5f5; }
+    
+    .option-item input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--purple);
+      cursor: pointer;
+    }
+
+    .option-item.selected {
+      background: #F4EFFF;
+      color: var(--purple);
+    }
+
+    .selected-count {
+      padding: 8px 14px;
+      font-size: 0.75rem;
+      font-weight: 800;
+      color: #999;
+      background: #fcfcfc;
+      border-top: 1px solid #eee;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* ── Custom Multi-select Search Box ── */
+    .search-select-container {
+      background: #fff;
+      border: 2px solid #eee;
+      border-radius: 18px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .search-input-wrapper {
+      padding: 12px;
+      border-bottom: 1px solid #eee;
+      background: #fafafa;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .search-input-wrapper i { color: #aaa; font-size: 0.9rem; }
+    
+    .search-input-wrapper input {
+      border: none;
+      background: transparent;
+      width: 100%;
+      font-size: 0.9rem;
+      font-family: inherit;
+      outline: none;
+    }
+
+    .options-list {
+      max-height: 200px;
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    .option-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #444;
+    }
+
+    .option-item:hover { background: #f5f5f5; }
+    
+    .option-item input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--purple);
+      cursor: pointer;
+    }
+
+    .option-item.selected {
+      background: #F4EFFF;
+      color: var(--purple);
+    }
+
+    .selected-count {
+      padding: 8px 14px;
+      font-size: 0.75rem;
+      font-weight: 800;
+      color: #999;
+      background: #fcfcfc;
+      border-top: 1px solid #eee;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* ── Download button ── */
+    #downloadBtn, #downloadHtmlBtn, #viewBtn, #shareBtn {
+      display: none;
+      width: calc(50% - 4px);
+      padding: 17px;
+      background: linear-gradient(135deg, #00C896, #00E5A6);
+      color: #fff;
+      font-family: 'Fredoka One', cursive;
+      font-size: 1.1rem;
+      border: none;
+      border-radius: 18px;
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+      box-shadow: 0 8px 24px rgba(0, 200, 150, 0.3);
+      transition: all 0.25s ease;
+    }
+
+    #downloadHtmlBtn {
+      background: linear-gradient(135deg, #FF6B2B, #FF8F5B);
+      box-shadow: 0 8px 24px rgba(255, 107, 43, 0.3);
+    }
+
+    #viewBtn {
+      width: 100%;
+      margin-top: 10px;
+      background: linear-gradient(135deg, var(--purple), #A47CFE);
+      box-shadow: 0 8px 24px rgba(123, 47, 255, 0.3);
+    }
+
+    #shareBtn {
+      width: 100%;
+      margin-top: 10px;
+      background: #F0F0F0;
+      color: #666;
+      font-size: 0.85rem;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    }
+
+    .download-buttons-wrapper {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+
+    #downloadBtn:hover, #downloadHtmlBtn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 32px rgba(0, 200, 150, 0.45);
+    }
+
+    #downloadHtmlBtn:hover {
+      box-shadow: 0 12px 32px rgba(255, 107, 43, 0.45);
+    }
+
+    .error-box {
+      background: #FFF0F0;
+      border: 2px solid #FFD0D0;
+      color: #D00;
+      border-radius: 14px;
+      padding: 12px 16px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      display: none;
+      margin-top: 10px;
+    }
+
+    .reset-link {
+      display: block;
+      text-align: center;
+      margin-top: 14px;
+      font-size: 0.8rem;
+      font-weight: 800;
+      color: #aaa;
+      cursor: pointer;
+      transition: color 0.2s;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .reset-link:hover {
+      color: var(--pink);
+    }
+
+    /* ── Dashboard Grid ── */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+      width: 100%;
+      margin: 0 auto;
+      z-index: 1;
+      position: relative;
+    }
+
+    @media (max-width: 900px) {
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      margin-bottom: 0 !important; /* Managed by grid gap */
+    }
+
+    /* ── Bubbles floating on page ── */
+    .page-bubble {
+      position: fixed;
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 0;
+      animation: pageBubble linear infinite;
+      opacity: 0;
+    }
+
+    @keyframes pageBubble {
+      0% {
+        transform: translateY(110vh);
+        opacity: 0;
+      }
+
+      10% {
+        opacity: 0.6;
+      }
+
+      90% {
+        opacity: 0.2;
+      }
+
+      100% {
+        transform: translateY(-10vh);
+        opacity: 0;
+      }
+    }
+
+    /* ── Footer ── */
+    .footer {
+      text-align: center;
+      margin-top: 32px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: #bbb;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    /* Responsive */
+    @media (max-width: 480px) {
+      .hero {
+        padding: 36px 16px 64px;
+      }
+
+      .card {
+        padding: 20px;
+      }
+
+      .flavor-row {
+        gap: 7px;
+      }
+
+      .flavor-chip {
+        font-size: 0.73rem;
+        padding: 6px 14px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Background page bubbles -->
+  <div id="pageBubbles"></div>
+
+  <!-- ── HERO ── -->
+  <div class="hero" id="hero">
+    <div class="hero-eyebrow">✦ Campaign Analytics Tool</div>
+    <h1 class="hero-title">📊 Final Report<br><span>Generator</span></h1>
+    <p class="hero-sub">Upload your campaign data — get a polished Excel report instantly.</p>
+  </div>
+
+  <!-- Wavy SVG divider -->
+  <div class="wave-divider">
+    <svg viewBox="0 0 1440 60" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="waveGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#7B2FFF" />
+          <stop offset="50%" stop-color="#FF2D78" />
+          <stop offset="100%" stop-color="#FF6B2B" />
+        </linearGradient>
+      </defs>
+      <path d="M0,0 C240,60 480,0 720,40 C960,80 1200,10 1440,50 L1440,0 Z" fill="url(#waveGrad)" />
+      <path d="M0,0 C360,50 720,0 1080,40 C1260,60 1380,20 1440,30 L1440,0 Z" fill="rgba(255,255,255,0.08)" />
+    </svg>
+  </div>
+
+  <!-- ── FLAVOR CHIPS ── -->
+  <div class="flavor-row">
+    <div class="flavor-chip" style="--chip-color: var(--pink)">
+      <div class="chip-dot"></div> 8+ Report Sheets
+    </div>
+    <div class="flavor-chip" style="--chip-color: var(--teal)">
+      <div class="chip-dot"></div> CSV & XLSX
+    </div>
+    <div class="flavor-chip" style="--chip-color: var(--orange)">
+      <div class="chip-dot"></div> Auto City Mapping
+    </div>
+    <div class="flavor-chip" style="--chip-color: var(--purple)">
+      <div class="chip-dot"></div> Instant Download
+    </div>
+  </div>
+
+  <!-- ── MAIN CONTENT ── -->
+  <div class="content">
+    <div class="dashboard-grid">
+      <!-- LEFT COLUMN -->
+      <div class="dash-col">
+        <!-- Upload card -->
+        <div class="card">
+          <div class="card-accent" style="background: linear-gradient(90deg, var(--pink), var(--orange));"></div>
+          <div class="section-title">🗂 Upload Your Files</div>
+
+          <!-- Report Type selector -->
+          <div class="url-box" style="margin-bottom: 18px;">
+            <div class="url-label" style="color: var(--pink);">🎯 Report Type</div>
+            <div class="lang-row">
+              <select id="modeSelect" aria-label="Report type" onchange="onModeChange()">
+                <option value="video" selected>Video Campaign</option>
+                <option value="banner">Banner Campaign</option>
+              </select>
+            </div>
+            <div class="lang-hint" id="modeHint">Video mode: upload the Video Tracker (VT) export.</div>
+          </div>
+
+          <!-- File 1 -->
+          <div class="upload-zone" id="zone1" ondragover="handleDrag(event,'zone1')" ondragleave="handleDragLeave('zone1')"
+            ondrop="handleDrop(event,'file1Input','zone1')">
+            <input type="file" id="file1Input" accept=".csv,.xlsx,.xls"
+              onchange="handleFileSelect('file1Input','zone1','fname1')" />
+            <div class="zone-emoji p">📋</div>
+            <div class="zone-content">
+              <div class="zone-title" id="zone1Title">Primary Video Campaign Data</div>
+              <div class="zone-desc" id="zone1Desc">Impressions · Clicks · Date · etc. (.csv / .xlsx) </div>
+              <div class="zone-filename" id="fname1"></div>
+            </div>
+            <span class="zone-badge req">Required</span>
+          </div>
+
+          <!-- File 2 -->
+          <div class="upload-zone file2-zone" id="zone2" ondragover="handleDrag(event,'zone2')"
+            ondragleave="handleDragLeave('zone2')" ondrop="handleDrop(event,'file2Input','zone2')">
+            <input type="file" id="file2Input" accept=".csv,.xlsx,.xls"
+              onchange="handleFileSelect('file2Input','zone2','fname2')" />
+            <div class="zone-emoji s">🏙️</div>
+            <div class="zone-content">
+              <div class="zone-title">City / Line Item Data</div>
+              <div class="zone-desc">City column + Line Item → generates Sheet 8</div>
+              <div class="zone-filename" id="fname2"></div>
+            </div>
+            <span class="zone-badge opt">Optional</span>
+          </div>
+        </div>
+
+        <!-- City DB picker (Moved to Left) -->
+        <div class="card" style="margin-top: 20px;">
+          <div class="card-accent" style="background: linear-gradient(90deg, var(--purple), var(--pink));"></div>
+          <div class="section-title">🏙️ City Database Sheets</div>
+          <div class="url-box lang-box">
+            <div class="search-select-container" id="cityContainer">
+              <div class="search-input-wrapper">
+                <i class="ti ti-search"></i>
+                <input type="text" placeholder="Search city sheets..." oninput="filterOptions('cityOptions', this.value)">
+              </div>
+              <div class="options-list" id="cityOptions">
+                <div style="padding:20px; text-align:center; color:#ccc;">Loading...</div>
+              </div>
+              <div class="selected-count" id="cityCount">0 Items Selected</div>
+            </div>
+            <div class="lang-hint">City data source — pivot cities are matched against these sheets and combined.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN -->
+      <div class="dash-col">
+        <!-- URL input card -->
+        <div class="card">
+          <div class="card-accent" style="background: linear-gradient(90deg, var(--orange), var(--yellow));"></div>
+          <div class="section-title">🔗 Screenshot URLs</div>
+
+          <!-- Language picker -->
+          <div class="url-box lang-box">
+            <div class="url-label" style="color: var(--teal);">🌐 Language / App Database</div>
+            <div class="search-select-container" id="langContainer">
+              <div class="search-input-wrapper">
+                <i class="ti ti-search"></i>
+                <input type="text" placeholder="Search languages..." oninput="filterOptions('langOptions', this.value)">
+              </div>
+              <div class="options-list" id="langOptions">
+                <div style="padding:20px; text-align:center; color:#ccc;">Loading...</div>
+              </div>
+              <div class="selected-count" id="langCount">0 Items Selected</div>
+            </div>
+            <div class="lang-hint">Selected sheets are used for App/URL validation. New URLs are saved to the first selected sheet.</div>
+          </div>
+
+          <!-- App / Website URLs (Moved to Right) -->
+          <div class="url-box">
+            <div class="url-label">🌐 App / Website URLs</div>
+            <textarea id="appUrlInput" placeholder="facebook.com&#10;youtube.com&#10;instagram.com" style="height: 200px;"></textarea>
+          </div>
+        </div>
+
+        <!-- Generate button -->
+        <button class="btn-generate" id="generateBtn" onclick="generate()" style="margin-top: 20px;">
+          <span class="btn-fizz">🫧</span> Generate My Report <span class="btn-fizz">🫧</span>
+        </button>
+      </div>
+    </div> <!-- end dashboard-grid -->
+
+    <!-- Status area -->
+    <div id="status-area">
+      <div class="card" style="margin-top: 20px;">
+        <div class="card-accent" style="background: linear-gradient(90deg, var(--purple), var(--teal));"></div>
+        <div class="progress-label">
+          <span id="statusText">Processing…</span>
+          <span id="progressPct">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progressBar"></div>
+        </div>
+        <div class="info-pills" id="infoPills"></div>
+        <div class="download-buttons-wrapper">
+          <button id="downloadHtmlBtn" onclick="triggerDownloadHtml()">📊 Download HTML</button>
+          <button id="downloadBtn" onclick="triggerDownload()">📋 Download Excel</button>
+          <button id="viewBtn" onclick="triggerView()">👁 View Report Online</button>
+          <button id="shareBtn" onclick="triggerShare()">🔗 Copy Shareable Link</button>
+        </div>
+        <div class="error-box" id="errorBox"></div>
+        <span class="reset-link" onclick="resetForm()">← Start over</span>
+      </div>
+    </div>
+
+    <div class="footer">Powered by your data · Built with 🫧 fizz</div>
+  </div>
+
+  <script>
+    /* ── Page bubbles ── */
+    const bubbleContainer = document.getElementById('pageBubbles');
+    const bubbleColors = ['#FF2D78', '#FFE000', '#00CFC1', '#FF6B2B', '#7B2FFF', '#C8FF3E'];
+    for (let i = 0; i < 18; i++) {
+      const b = document.createElement('div');
+      const size = Math.random() * 24 + 8;
+      b.className = 'page-bubble';
+      b.style.cssText = `
+      left: ${Math.random() * 100}%;
+      width: ${size}px; height: ${size}px;
+      background: ${bubbleColors[Math.floor(Math.random() * bubbleColors.length)]};
+      animation-duration: ${Math.random() * 14 + 10}s;
+      animation-delay: ${Math.random() * 12}s;
+      opacity: 0.15;
+    `;
+      bubbleContainer.appendChild(b);
+    }
+
+    /* ── Hero bubbles ── */
+    const hero = document.getElementById('hero');
+    for (let i = 0; i < 12; i++) {
+      const b = document.createElement('div');
+      const size = Math.random() * 30 + 10;
+      b.className = 'hero-bubble';
+      b.style.cssText = `
+      left: ${Math.random() * 100}%;
+      bottom: 0;
+      width: ${size}px; height: ${size}px;
+      animation-duration: ${Math.random() * 5 + 4}s;
+      animation-delay: ${Math.random() * 6}s;
+    `;
+      hero.appendChild(b);
+    }
+
+    /* ── File upload logic ── */
+    // Change this URL to your hosted backend URL (e.g. https://your-backend.herokuapp.com)
+    const API = window.BACKEND_URL || "http://localhost:5000";
+    let currentJobId = null, pollTimer = null;
+
+    /* ── Data loading logic ── */
+    async function loadLanguages() {
+      const container = document.getElementById('langOptions');
+      try {
+        const res = await fetch(`${API}/db-sheets`);
+        const data = await res.json();
+        renderSearchOptions('langOptions', data.sheets, 'langCount');
+      } catch (err) {
+        console.error('loadLanguages error:', err);
+        container.innerHTML = `<div style="color:red; padding:10px;">Error: ${err.message}</div>`;
+      }
+    }
+
+    async function loadCitySheets() {
+      const container = document.getElementById('cityOptions');
+      try {
+        const res = await fetch(`${API}/city-sheets`);
+        const data = await res.json();
+        renderSearchOptions('cityOptions', data.sheets, 'cityCount');
+      } catch (err) {
+        console.error('loadCitySheets error:', err);
+        container.innerHTML = `<div style="color:red; padding:10px;">Error: ${err.message}</div>`;
+      }
+    }
+
+    function renderSearchOptions(containerId, options, countId) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      container.innerHTML = '';
+      if (!options || !options.length) {
+        container.innerHTML = '<div style="padding:20px; text-align:center; color:#ccc;">No items found</div>';
+        return;
+      }
+      options.forEach(opt => {
+        const div = document.createElement('div');
+        div.className = 'option-item';
+        div.innerHTML = `
+          <input type="checkbox" value="${opt}" onchange="updateSelectedCount('${containerId}', '${countId}')">
+          <span>${opt}</span>
+        `;
+        div.onclick = (e) => {
+          if (e.target.tagName !== 'INPUT') {
+            const cb = div.querySelector('input');
+            cb.checked = !cb.checked;
+            cb.dispatchEvent(new Event('change'));
+          }
+        };
+        container.appendChild(div);
+      });
+      updateSelectedCount(containerId, countId);
+    }
+
+    function updateSelectedCount(containerId, countId) {
+      const container = document.getElementById(containerId);
+      const items = container.querySelectorAll('.option-item');
+      let count = 0;
+      items.forEach(item => {
+        const cb = item.querySelector('input');
+        if (cb.checked) {
+          count++;
+          item.classList.add('selected');
+        } else {
+          item.classList.remove('selected');
+        }
+      });
+      const badge = document.getElementById(countId);
+      if (badge) badge.textContent = `${count} Items Selected`;
+    }
+
+    function filterOptions(containerId, query) {
+      const container = document.getElementById(containerId);
+      const items = container.querySelectorAll('.option-item');
+      query = query.toLowerCase();
+      items.forEach(item => {
+        const text = item.textContent.toLowerCase();
+        item.style.display = text.includes(query) ? 'flex' : 'none';
+      });
+    }
+
+    function getSelectedValues(containerId) {
+      const container = document.getElementById(containerId);
+      if (!container) return [];
+      return Array.from(container.querySelectorAll('input:checked')).map(cb => cb.value);
+    }
+
+    // Initialize
+    window.addEventListener('DOMContentLoaded', () => {
+      loadLanguages();
+      loadCitySheets();
+    });
+
+    function handleDrag(e, id) { e.preventDefault(); document.getElementById(id).classList.add('dragover'); }
+    function handleDragLeave(id) { document.getElementById(id).classList.remove('dragover'); }
+    function handleDrop(e, inputId, zoneId) {
+      e.preventDefault(); document.getElementById(zoneId).classList.remove('dragover');
+      const files = e.dataTransfer.files;
+      if (files.length) {
+        const input = document.getElementById(inputId);
+        const dt = new DataTransfer(); dt.items.add(files[0]); input.files = dt.files;
+        input.dispatchEvent(new Event('change'));
+      }
+    }
+    function handleFileSelect(inputId, zoneId, fnameId) {
+      const input = document.getElementById(inputId);
+      const zone = document.getElementById(zoneId);
+      const fname = document.getElementById(fnameId);
+      if (input.files.length) {
+        fname.textContent = '📎 ' + input.files[0].name;
+        zone.classList.add('has-file');
+      } else { fname.textContent = ''; zone.classList.remove('has-file'); }
+    }
+
+    function onModeChange() {
+      const mode = document.getElementById('modeSelect').value;
+      const title = document.getElementById('zone1Title');
+      const desc  = document.getElementById('zone1Desc');
+      const hint  = document.getElementById('modeHint');
+      if (mode === 'banner') {
+        title.textContent = 'Primary Banner Campaign Data';
+        desc.textContent  = 'Banner export: Line item + Daily Impressions · Clicks · CTR (.xlsx)';
+        hint.textContent  = 'Banner mode: upload the banner campaign daily-report export.';
+      } else {
+        title.textContent = 'Primary Video Campaign Data';
+        desc.textContent  = 'Impressions · Clicks · Date · etc. (.csv / .xlsx)';
+        hint.textContent  = 'Video mode: upload the Video Tracker (VT) export.';
+      }
+    }
+
+    async function generate() {
+      const file1 = document.getElementById('file1Input').files[0];
+      const mode  = document.getElementById('modeSelect').value || 'video';
+      if (!file1) { alert('Please select File 1 (Primary Campaign Data).'); return; }
+      const selectedLanguages = getSelectedValues('langOptions');
+      
+      if (selectedLanguages.length === 0) { 
+        alert('Please select at least one Language/Sheet — it controls App/URL validation.'); 
+        return; 
+      }
+      
+      const btn = document.getElementById('generateBtn'); btn.disabled = true;
+      const formData = new FormData();
+      formData.append('file', file1);
+      formData.append('mode', mode);
+      const file2 = document.getElementById('file2Input').files[0];
+      if (file2) formData.append('file2', file2);
+      const appUrls = document.getElementById('appUrlInput').value;
+      if (appUrls) formData.append('app_urls', appUrls.trim());
+      
+      // Send as comma-separated strings
+      formData.append('selected_sheet', selectedLanguages.join(','));
+      
+      const selectedCities = getSelectedValues('cityOptions');
+      if (selectedCities.length > 0) {
+        formData.append('city_sheet', selectedCities.join(','));
+      }
+      
+      setStatus('Uploading files…', 10);
+      document.getElementById('status-area').style.display = 'block';
+      try {
+        const res = await fetch(`${API}/upload`, { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Upload failed');
+        currentJobId = data.job_id;
+        setStatus('Files uploaded — processing…', 25);
+        pollTimer = setInterval(pollStatus, 1500);
+      } catch (err) { showError(err.message); btn.disabled = false; }
+    }
+
+    async function pollStatus() {
+      try {
+        const res = await fetch(`${API}/status/${currentJobId}`);
+        if (res.status === 404) { clearInterval(pollTimer); showError('Job lost. Please refresh.'); document.getElementById('generateBtn').disabled = false; return; }
+        const data = await res.json();
+        if (data.status === 'processing') { setStatus('Building report sheets…', 60); }
+        else if (data.status === 'done') {
+          clearInterval(pollTimer); setStatus('Report ready! 🎉', 100);
+          if (data.city_info) showInfoPills(data.city_info);
+          document.getElementById('downloadBtn').style.display = 'block';
+          document.getElementById('downloadHtmlBtn').style.display = 'block';
+          document.getElementById('viewBtn').style.display = 'block';
+          document.getElementById('shareBtn').style.display = 'block';
+        } else if (data.status === 'error') {
+          clearInterval(pollTimer); showError(data.error || 'Unknown error');
+          document.getElementById('generateBtn').disabled = false;
+        }
+      } catch (err) { clearInterval(pollTimer); showError('Lost connection.'); document.getElementById('generateBtn').disabled = false; }
+    }
+
+    function showInfoPills(info) {
+      const c = document.getElementById('infoPills'); c.innerHTML = '';
+      if (info.matched_line_items !== undefined) addPill(c, `✓ ${info.matched_line_items} matched line items`, 'success');
+      if (info.cities_found !== undefined) addPill(c, `🏙 ${info.cities_found} unique cities`, 'success');
+      if (info.warnings?.length) info.warnings.forEach(w => addPill(c, `⚠ ${w}`, 'warn'));
+    }
+    function addPill(c, text, type) {
+      const p = document.createElement('div'); p.className = `pill ${type}`; p.textContent = text; c.appendChild(p);
+    }
+    function triggerDownload() { window.location.href = `${API}/download/${currentJobId}`; }
+    function triggerDownloadHtml() { window.location.href = `${API}/download-html/${currentJobId}`; }
+    function triggerView() { window.open(`${API}/report/${currentJobId}`, '_blank'); }
+    function triggerShare() {
+      const url = `${API}/report/${currentJobId}`;
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.getElementById('shareBtn');
+        const oldText = btn.textContent;
+        btn.textContent = '✅ Link Copied!';
+        btn.style.background = '#e7f7f0';
+        btn.style.color = '#0a6e44';
+        setTimeout(() => {
+          btn.textContent = oldText;
+          btn.style.background = '#F0F0F0';
+          btn.style.color = '#666';
+        }, 2000);
+      }).catch(err => alert('Could not copy link: ' + err));
+    }
+    function setStatus(msg, pct) {
+      document.getElementById('statusText').textContent = msg;
+      document.getElementById('progressPct').textContent = pct + '%';
+      document.getElementById('progressBar').style.width = pct + '%';
+    }
+    function showError(msg) {
+      const box = document.getElementById('errorBox'); box.textContent = 'Error: ' + msg; box.style.display = 'block';
+      setStatus('Something went wrong.', 0);
+    }
+    function resetForm() {
+      clearInterval(pollTimer); currentJobId = null;
+      ['file1Input', 'file2Input'].forEach(id => document.getElementById(id).value = '');
+      ['zone1', 'zone2'].forEach(id => document.getElementById(id).classList.remove('has-file'));
+      ['fname1', 'fname2'].forEach(id => document.getElementById(id).textContent = '');
+      document.getElementById('appUrlInput').value = '';
+      document.getElementById('status-area').style.display = 'none';
+      document.getElementById('downloadBtn').style.display = 'none';
+      document.getElementById('downloadHtmlBtn').style.display = 'none';
+      document.getElementById('viewBtn').style.display = 'none';
+      document.getElementById('shareBtn').style.display = 'none';
+      document.getElementById('errorBox').style.display = 'none';
+      document.getElementById('infoPills').innerHTML = '';
+      document.getElementById('generateBtn').disabled = false;
+      setStatus('Processing…', 0); document.getElementById('progressPct').textContent = '0%';
+    }
+  </script>
+</body>
+
+</html>
