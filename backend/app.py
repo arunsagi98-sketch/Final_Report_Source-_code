@@ -25,7 +25,16 @@ from openpyxl.worksheet.errors import IgnoredError
 from flask import Flask, request, jsonify, send_file, after_this_request
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-import reference_db as refdb
+
+try:
+    from . import reference_db as refdb
+except ImportError:
+    import sys
+    from pathlib import Path
+    _APP_DIR = Path(__file__).resolve().parent
+    if str(_APP_DIR) not in sys.path:
+        sys.path.insert(0, str(_APP_DIR))
+    import reference_db as refdb
 
 # -- DB Config ----------------------------------------------------------------
 _DB_LOCK = threading.Lock()
