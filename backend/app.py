@@ -2502,13 +2502,6 @@ def add_cors(response):
     return response
 
 
-# Serve the UI directly — avoids file:// cross-origin fetch errors
-@app.route("/")
-def index():
-    frontend_path = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
-    return send_file(str(frontend_path))
-
-
 # Expose App/URL DB sheet names for language dropdown
 @app.route("/db-sheets", methods=["GET"])
 def db_sheets():
