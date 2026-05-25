@@ -25,6 +25,7 @@ from openpyxl.worksheet.errors import IgnoredError
 from flask import Flask, request, jsonify, send_file, after_this_request
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+import reference_db as refdb
 
 # -- DB Config ----------------------------------------------------------------
 _DB_LOCK = threading.Lock()
@@ -59,20 +60,23 @@ CURATED_LANGUAGES = [
 app = Flask(__name__)
 CORS(app)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+print("[DEV] app.py imported and loaded")
 
 BASE_DIR = Path(__file__).resolve().parent
+DB_DIR = Path(os.getenv("DB_DIR", str(BASE_DIR / "db")))
 
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "outputs"
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+DB_DIR.mkdir(parents=True, exist_ok=True)
 MAX_REPORT_AGE = 60 * 60 * 24  # keep generated outputs for 24 hours
 
 ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 jobs: dict[str, dict] = {}
 
-APP_DB_FILE        = str(BASE_DIR / "data" / "App_Url Data base.xlsx")
-CITY_REF_FILE      = str(BASE_DIR / "data" / "City for Aoutomation.xlsx")
+APP_DB_FILE        = str(DB_DIR / "App_Url Data base.xlsx")
+CITY_REF_FILE      = str(DB_DIR / "City for Aoutomation.xlsx")
 CITY_REF_SHEET     = "Master Database"
 _HTML_LOGO_PATH    = BASE_DIR / "assets" / "BILLION TAGS PNG white.png"
 _HTML_LOGO_DATA    = ""
@@ -81,6 +85,17 @@ if _HTML_LOGO_PATH.exists():
         _HTML_LOGO_DATA = base64.b64encode(_HTML_LOGO_PATH.read_bytes()).decode("ascii")
     except Exception:
         _HTML_LOGO_DATA = ""
+
+if os.getenv("DATABASE_URL") or (os.getenv("PGDATABASE") and os.getenv("PGUSER")):
+    try:
+        refdb.bootstrap_reference_data(APP_DB_FILE, CITY_REF_FILE)
+    except Exception as e:
+        raise RuntimeError(
+            "Failed to initialize PostgreSQL reference data. "
+            "Set DATABASE_URL and install psycopg2-binary before starting the app."
+        ) from e
+else:
+    print("[WARN] PostgreSQL settings not detected. Set DATABASE_URL to enable the new DB layer.")
 
 # -- Excel styling helpers -----------------------------------------------------
 HEADER_BG = "00B0F0"
@@ -91,6 +106,16 @@ TOTAL_FG  = "000000"
 def _thin_border():
     s = Side(style="thin", color="000000")
     return Border(left=s, right=s, top=s, bottom=s)
+
+_ALIGNMENT_CACHE: dict[str, Alignment] = {}
+
+
+def _align(horizontal: str) -> Alignment:
+    cached = _ALIGNMENT_CACHE.get(horizontal)
+    if cached is None:
+        cached = Alignment(horizontal=horizontal, vertical="center")
+        _ALIGNMENT_CACHE[horizontal] = cached
+    return cached
 
 def style_header(ws, row, num_cols):
     fill = PatternFill("solid", fgColor=HEADER_BG)
@@ -120,8 +145,15 @@ def style_total_row(ws, row, num_cols):
         cell.border = _thin_border()
 
 def auto_fit(ws):
+    # Sample-based autofit keeps large reports noticeably faster while
+    # preserving the usual visual sizing for the workbook.
+    sample_limit = 200
     for col in ws.columns:
-        width = max((len(str(cell.value or "")) for cell in col), default=10)
+        width = 10
+        for idx, cell in enumerate(col):
+            if idx >= sample_limit:
+                break
+            width = max(width, len(str(cell.value or "")))
         ws.column_dimensions[get_column_letter(col[0].column)].width = min(width + 4, 50)
 
 def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=None, total_alignments=None):
@@ -129,8 +161,15 @@ def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=Non
     formulas = formulas or {}
     alignments = alignments or {}
     col_map = {h: get_column_letter(i) for i, h in enumerate(headers, 1)}
+    numeric_headers = {
+        "Impressions", "Clicks", "Reach", "Frequency",
+        "Measurable Impressions", "Viewable Impressions",
+        "Sum of Starts (Video)", "Sum of Complete Views (Video)"
+    }
 
-    def get_align_str(h_name, idx, align_config):
+    def get_align_str(h_name, idx, align_config, is_header=False):
+        if is_header:
+            return "center"
         if isinstance(align_config, str):
             return align_config
         if h_name in align_config:
@@ -139,11 +178,34 @@ def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=Non
             return "left" if idx == 1 else "right"
         return "center"
 
+    def _is_numeric_like(val) -> bool:
+        if val is None:
+            return False
+        if isinstance(val, bool):
+            return False
+        if isinstance(val, (int, float)):
+            return True
+        try:
+            if hasattr(val, "item"):
+                val = val.item()
+        except Exception:
+            pass
+        if isinstance(val, str):
+            s = val.strip().replace(",", "")
+            if s.endswith("%"):
+                s = s[:-1]
+            try:
+                float(s)
+                return True
+            except Exception:
+                return False
+        return False
+
     # Write headers
     for c_idx, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=c_idx, value=h)
-        target = get_align_str(h, c_idx, alignments)
-        cell.alignment = Alignment(horizontal=target, vertical="center")
+        target = get_align_str(h, c_idx, alignments, is_header=True)
+        cell.alignment = _align(target)
     style_header(ws, 1, len(headers))
 
     def _assign(cell, val, h_name=None, row_idx=None):
@@ -156,6 +218,8 @@ def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=Non
             cell.value = f"={f_temp}"
             if h_name in ["CTR", "Click Rate (CTR)", "Viewability", "VCR (Completion Rate)"]:
                 cell.number_format = "0.00%"
+            elif h_name in numeric_headers:
+                cell.number_format = "#,##0"
             return
         if isinstance(val, str) and val.strip().endswith("%"):
             try:
@@ -165,16 +229,26 @@ def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=Non
                 cell.value = val
         elif isinstance(val, str) and val.lstrip('-').isdigit():
             cell.value = int(val)
+            if h_name in numeric_headers:
+                cell.number_format = "#,##0"
         else:
             cell.value = val
+            if h_name in numeric_headers and isinstance(val, (int, float)):
+                cell.number_format = "#,##0"
 
     # Write data rows
     for r_idx, row in enumerate(rows, 2):
         for c_idx, h in enumerate(headers, 1):
             cell = ws.cell(row=r_idx, column=c_idx)
-            _assign(cell, row.get(h, ""), h_name=h, row_idx=r_idx)
-            target = get_align_str(h, c_idx, alignments)
-            cell.alignment = Alignment(horizontal=target, vertical="center")
+            raw_val = row.get(h, "")
+            _assign(cell, raw_val, h_name=h, row_idx=r_idx)
+            if c_idx == 1:
+                target = "left"
+            elif h in formulas or h in numeric_headers or _is_numeric_like(raw_val):
+                target = "right"
+            else:
+                target = get_align_str(h, c_idx, alignments)
+            cell.alignment = _align(target)
             cell.border = _thin_border()
 
     # Write total row
@@ -184,11 +258,16 @@ def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=Non
             cell = ws.cell(row=t_row, column=c_idx)
             h_name = headers[c_idx - 1]
             val = total_row.get(h_name, "")
-            
-            # Use total_alignments if provided, else fall back to alignments
-            t_align_config = total_alignments if total_alignments is not None else alignments
-            target = get_align_str(h, c_idx, t_align_config)
-            cell.alignment = Alignment(horizontal=target, vertical="center")
+
+            # Use explicit layout rules for the total row too.
+            if c_idx == 1:
+                target = "left"
+            elif h_name in formulas or h_name in numeric_headers or _is_numeric_like(val):
+                target = "right"
+            else:
+                t_align_config = total_alignments if total_alignments is not None else alignments
+                target = get_align_str(h, c_idx, t_align_config)
+            cell.alignment = _align(target)
 
             if h_name in formulas:
                 f_temp = formulas[h_name]
@@ -196,9 +275,7 @@ def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=Non
                     f_temp = f_temp.replace(f"{{{h_ref}}}", f"{let}{t_row}")
                 cell.value = f"={f_temp}"
                 cell.number_format = "0.00%"
-            elif h_name in ["Impressions", "Clicks", "Reach", "Measurable Impressions",
-                            "Viewable Impressions", "Sum of Starts (Video)",
-                            "Sum of Complete Views (Video)"]:
+            elif h_name in numeric_headers:
                 let = col_map[h_name]
                 cell.value = f"=SUM({let}2:{let}{t_row-1})"
                 cell.number_format = "#,##0"
@@ -421,103 +498,56 @@ def _cached_urls_from_sheet(path: str, sheet_name: str, mtime_ns: int) -> tuple[
 
 
 def _resolve_sheet_name(sheet_name: str) -> str | None:
-    """Return the exact sheet name in the DB file, using case-insensitive match."""
+    """Legacy compatibility helper retained for older callers."""
     if not sheet_name or not sheet_name.strip():
         return None
-    try:
-        names = _cached_sheetnames(APP_DB_FILE, _file_mtime_ns(APP_DB_FILE))
-        # Exact match first
-        if sheet_name in names:
-            return sheet_name
-        # Case-insensitive fallback
-        name_lower = sheet_name.strip().lower()
-        for s in names:
-            if s.strip().lower() == name_lower:
-                return s
-    except Exception:
-        pass
+    names = refdb.get_app_sheet_names()
+    if sheet_name in names:
+        return sheet_name
+    name_lower = sheet_name.strip().lower()
+    for s in names:
+        if s.strip().lower() == name_lower:
+            return s
     return None
 
 
 def _load_db_sheet(sheet_name: str) -> pd.DataFrame:
-    """Load a specific sheet from the DB file (header on row 2)."""
+    """Load a specific reference sheet from PostgreSQL."""
     resolved = _resolve_sheet_name(sheet_name)
     if not resolved:
         return pd.DataFrame()
     try:
-        return _df_from_cached(APP_DB_FILE, resolved, _file_mtime_ns(APP_DB_FILE), header=1)
+        return refdb.load_app_sheet(resolved)
     except Exception:
         return pd.DataFrame()
 
 
 def get_db_sheet_names() -> list[str]:
-    """Return all sheet names from the DB file for the UI dropdown."""
+    """Return all app DB sheet names for the UI dropdown."""
     try:
-        return list(_cached_sheetnames(APP_DB_FILE, _file_mtime_ns(APP_DB_FILE)))
+        names = refdb.get_app_sheet_names()
+        if names:
+            return names
+        return refdb.fallback_app_sheet_names_from_workbook(APP_DB_FILE)
     except Exception:
-        return []
+        try:
+            return refdb.fallback_app_sheet_names_from_workbook(APP_DB_FILE)
+        except Exception:
+            return []
 
 
 def get_urls_from_multiple_sheets(sheet_names_str: str) -> list[str]:
     """Return all cleaned URLs from multiple DB sheets, merged and deduplicated."""
-    if not sheet_names_str: return []
-    sheet_names = [s.strip() for s in sheet_names_str.split(",") if s.strip()]
-
-    all_urls = set()
-    mtime_ns = _file_mtime_ns(APP_DB_FILE)
-    for sn in sheet_names:
-        for cleaned in _cached_urls_from_sheet(APP_DB_FILE, sn, mtime_ns):
-            all_urls.add(cleaned)
-    return list(all_urls)
+    try:
+        return refdb.get_app_urls_from_sheets(sheet_names_str)
+    except Exception:
+        return []
 
 
 def append_urls_to_sheet(sheet_name: str, new_urls: list[str]) -> None:
-    """
-    Append new_urls to the selected sheet in the DB file
-    under the URL / App Name column if they don't already exist.
-    """
-    if not new_urls:
-        return
+    """Append new URLs to the selected sheet in PostgreSQL."""
     try:
-        resolved = _resolve_sheet_name(sheet_name)
-        if not resolved:
-            return
-        wb = openpyxl.load_workbook(APP_DB_FILE)
-        if resolved not in wb.sheetnames:
-            wb.close()
-            return
-        ws = wb[resolved]
-
-        # Find the URL column index (header is on row 2 per _load_db_sheet)
-        url_col_idx = None
-        for col in ws.iter_cols(min_row=2, max_row=2):
-            for cell in col:
-                if str(cell.value).strip() == _DB_URL_COL:
-                    url_col_idx = cell.column
-                    break
-            if url_col_idx:
-                break
-
-        if url_col_idx is None:
-            wb.close()
-            return
-
-        # Collect existing URLs
-        existing = set()
-        for row in ws.iter_rows(min_row=3, min_col=url_col_idx, max_col=url_col_idx):
-            for cell in row:
-                val = _clean_url(str(cell.value or ""))
-                if val not in _DB_JUNK:
-                    existing.add(val)
-
-        # Append only truly new ones
-        for url in new_urls:
-            if url not in existing and url not in _DB_JUNK:
-                ws.append({url_col_idx: url})
-                existing.add(url)
-
-        wb.save(APP_DB_FILE)
-        wb.close()
+        refdb.append_app_urls_to_sheet(sheet_name, new_urls)
     except Exception as e:
         print(f"[WARN] append_urls_to_sheet failed: {e}")
 
@@ -758,8 +788,8 @@ def build_sheet2_date(df, total_imp, total_clk, ctr_reach, is_banner=False):
 
         if is_banner:
             # Generate viewability synthetically for banner format
-            view = round(imp * random.uniform(0.55, 0.70))
-            meas = round(imp * random.uniform(0.90, 0.95))
+            meas = round(imp * random.uniform(0.90, 0.96))
+            view = round(meas * random.uniform(0.75, 0.85))
             sum_view += view
             sum_meas += meas
             rows.append({
@@ -1076,78 +1106,24 @@ def build_sheet7_exchange(total_imp, total_clk, ctr_reach):
 # -- City DB helpers -----------------------------------------------------------
 
 def get_city_db_sheet_names() -> list[str]:
-    """Return sheet names from City for Automation.xlsx, excluding summary sheets."""
-    EXCLUDE = {"summary by state"}
+    """Return city reference sheet names, excluding summary sheets."""
     try:
-        names = _cached_sheetnames(CITY_REF_FILE, _file_mtime_ns(CITY_REF_FILE))
-        return [s for s in names if s.strip().lower() not in EXCLUDE]
+        names = refdb.get_city_sheet_names()
+        if names:
+            return names
+        return refdb.fallback_city_sheet_names_from_workbook(CITY_REF_FILE)
     except Exception as e:
         print(f"[WARN] get_city_db_sheet_names failed: {e}")
-        return []
+        try:
+            return refdb.fallback_city_sheet_names_from_workbook(CITY_REF_FILE)
+        except Exception:
+            return []
 
 
 def load_city_db_sheet(sheet_names_str: str) -> list[dict]:
-    """
-    Load and merge (city_name, weight, creatives) from multiple sheets.
-    Returns a list of dicts: {'name': str, 'weight': float, 'creatives': list[str]}
-    """
-    if not sheet_names_str: return []
-    sheet_names = [sn.strip() for sn in sheet_names_str.split(",") if sn.strip()]
-    
-    seen_cities = {} # city_lower -> {'name': str, 'weight': float, 'creatives': set()}
-    
+    """Load and merge (city_name, weight, creatives) from multiple sheets."""
     try:
-        available_sheets = set(_cached_sheetnames(CITY_REF_FILE, _file_mtime_ns(CITY_REF_FILE)))
-        mtime_ns = _file_mtime_ns(CITY_REF_FILE)
-        for sn in sheet_names:
-            if sn not in available_sheets:
-                continue
-            cols, rows = _cached_read_excel(CITY_REF_FILE, sn, mtime_ns, header=0)
-            df = pd.DataFrame(list(rows), columns=list(cols))
-            if "City" not in df.columns:
-                continue
-            
-            weight_col = next(
-                (c for c in ["Potential Impressions", "Unique Cookies w/ Impressions"]
-                 if c in df.columns), None
-            )
-            creative_col = next(
-                (c for c in df.columns if "creative" in c.lower()), None
-            )
-            
-            df = df[df["City"].notna()].copy()
-            for _, row in df.iterrows():
-                city_name = str(row["City"]).strip()
-                if not city_name or city_name.lower() in ["nan", "none", ""]:
-                    continue
-                
-                weight = safe_float(row[weight_col]) if weight_col else 1.0
-                creatives = []
-                if creative_col and pd.notna(row[creative_col]):
-                    # Handle multiple creatives in one cell if comma-separated
-                    raw_c = str(row[creative_col])
-                    creatives = [c.strip() for c in raw_c.replace("|", ",").split(",") if c.strip()]
-                
-                cl = city_name.lower()
-                if cl in seen_cities:
-                    seen_cities[cl]['weight'] += weight
-                    seen_cities[cl]['creatives'].update(creatives)
-                else:
-                    seen_cities[cl] = {
-                        'name': city_name,
-                        'weight': weight,
-                        'creatives': set(creatives)
-                    }
-        
-        merged = [
-            {
-                'name': v['name'],
-                'weight': float(v['weight']),
-                'creatives': sorted(list(v['creatives']))
-            } 
-            for v in seen_cities.values()
-        ]
-        return sorted(merged, key=lambda x: x['weight'], reverse=True)
+        return refdb.load_city_db_sheet(sheet_names_str)
     except Exception as e:
         print(f"[WARN] load_city_db_sheet failed: {e}")
         return []
@@ -1156,28 +1132,9 @@ def load_city_db_sheet(sheet_names_str: str) -> list[dict]:
 # -- City reference file helper -----------------------------------------------
 
 def _load_city_reference(n_cities: int = 50) -> list[tuple[str, float]]:
-    """
-    Load top N cities and their weights from City for Aoutomation.xlsx.
-    Uses 'Potential Impressions' as weight. Returns [(city_name, weight), ...].
-    """
+    """Load top N cities and their weights from PostgreSQL."""
     try:
-        df = _df_from_cached(CITY_REF_FILE, CITY_REF_SHEET, _file_mtime_ns(CITY_REF_FILE), header=0)
-        if "City" not in df.columns:
-            return []
-        weight_col = next(
-            (c for c in ["Potential Impressions", "Unique Cookies w/ Impressions"]
-             if c in df.columns), None
-        )
-        df = df[df["City"].notna()].copy()
-        df["_city"] = df["City"].astype(str).str.strip()
-        df = df[df["_city"].str.lower().notnull() & (df["_city"] != "")]
-        if weight_col:
-            df["_weight"] = df[weight_col].apply(safe_float)
-        else:
-            df["_weight"] = 1.0
-        df = df[df["_weight"] > 0].sort_values("_weight", ascending=False)
-        return [(row["_city"], float(row["_weight"]))
-                for _, row in df.head(n_cities).iterrows()]
+        return refdb.load_city_reference(n_cities)
     except Exception as e:
         print(f"[WARN] _load_city_reference failed: {e}")
         return []
@@ -2009,47 +1966,47 @@ def process_file(job_id: str, filepath1: Path, filepath2: Path | None,
         )
         h10 = ["App/URL", "Impressions", "Clicks", "Click Rate (CTR)"]
         f10 = {"Click Rate (CTR)": "{Clicks}/{Impressions}"}
-        align10 = {"App/URL": "left", "Impressions": "center", "Clicks": "center", "Click Rate (CTR)": "center"}
+        align10 = {"App/URL": "left", "Impressions": "right", "Clicks": "right", "Click Rate (CTR)": "right"}
         write_sheet(ws10, h10, s10, s10t, formulas=f10, alignments=align10, total_alignments={h: "right" if i>0 else "left" for i, h in enumerate(h10)})
         jobs[job_id]["app_info"] = app_info
 
         ws3 = wb.create_sheet("TIME OF DAY")
         h3 = ["Time of Day","Impressions","Clicks","Click Rate (CTR)"]
         f_ctr = {"Click Rate (CTR)": "{Clicks}/{Impressions}"}
-        align3 = {"Time of Day": "left", "Impressions": "center", "Clicks": "center", "Click Rate (CTR)": "center"}
+        align3 = {"Time of Day": "left", "Impressions": "right", "Clicks": "right", "Click Rate (CTR)": "right"}
         write_sheet(ws3, h3, s3, s3t, formulas=f_ctr, alignments=align3, total_alignments={h: "right" if i>0 else "left" for i, h in enumerate(h3)})
 
         ws7 = wb.create_sheet("EXCHANGE")
         h7 = ["Exchange","Impressions","Clicks","Click Rate (CTR)"]
-        align7 = {"Exchange": "left", "Impressions": "center", "Clicks": "center", "Click Rate (CTR)": "center"}
+        align7 = {"Exchange": "left", "Impressions": "right", "Clicks": "right", "Click Rate (CTR)": "right"}
         write_sheet(ws7, h7, s7, s7t, formulas=f_ctr, alignments=align7, total_alignments={h: "right" if i>0 else "left" for i, h in enumerate(h7)})
 
         ws6 = wb.create_sheet("DEVICE")
         h6 = ["Device Type","Impressions","Clicks","Click Rate (CTR)"]
-        align6 = {"Device Type": "left", "Impressions": "center", "Clicks": "center", "Click Rate (CTR)": "center"}
+        align6 = {"Device Type": "left", "Impressions": "right", "Clicks": "right", "Click Rate (CTR)": "right"}
         write_sheet(ws6, h6, s6, s6t, formulas=f_ctr, alignments=align6, total_alignments={h: "right" if i>0 else "left" for i, h in enumerate(h6)})
 
         if s9 is not None:
             ws9 = wb.create_sheet("CREATIVE")
             h9 = ["Creative","Impressions","Clicks","Click Rate (CTR)"]
-            align9 = {"Creative": "left", "Impressions": "center", "Clicks": "center", "Click Rate (CTR)": "center"}
+            align9 = {"Creative": "left", "Impressions": "right", "Clicks": "right", "Click Rate (CTR)": "right"}
             write_sheet(ws9, h9, s9, s9t, formulas=f_ctr, alignments=align9, total_alignments={h: "right" if i>0 else "left" for i, h in enumerate(h9)})
 
         if s8 is not None:
             ws8 = wb.create_sheet("CITY")
             h8 = ["City","Impressions","Clicks","Click Rate (CTR)"]
-            align8 = {"City": "left", "Impressions": "center", "Clicks": "center", "Click Rate (CTR)": "center"}
+            align8 = {"City": "left", "Impressions": "right", "Clicks": "right", "Click Rate (CTR)": "right"}
             write_sheet(ws8, h8, s8, s8t, formulas=f_ctr, alignments=align8, total_alignments={h: "right" if i>0 else "left" for i, h in enumerate(h8)})
             jobs[job_id]["city_info"] = city_info
 
         ws4 = wb.create_sheet("AGE")
         h4 = ["Age","Impressions","Clicks","Click Rate (CTR)"]
-        align4 = {"Age": "left", "Impressions": "center", "Clicks": "center", "Click Rate (CTR)": "center"}
+        align4 = {"Age": "left", "Impressions": "right", "Clicks": "right", "Click Rate (CTR)": "right"}
         write_sheet(ws4, h4, s4, s4t, formulas=f_ctr, alignments=align4, total_alignments={h: "right" if i>0 else "left" for i, h in enumerate(h4)})
 
         ws5 = wb.create_sheet("GENDER")
         h5 = ["Gender","Impressions","Clicks","Click Rate (CTR)"]
-        align5 = {"Gender": "left", "Impressions": "center", "Clicks": "center", "Click Rate (CTR)": "center"}
+        align5 = {"Gender": "left", "Impressions": "right", "Clicks": "right", "Click Rate (CTR)": "right"}
         write_sheet(ws5, h5, s5, s5t, formulas=f_ctr, alignments=align5, total_alignments={h: "right" if i>0 else "left" for i, h in enumerate(h5)})
 
         wb.save(output_path)
@@ -2149,55 +2106,21 @@ def _norm_lang(s: str) -> str:
 
 def _load_db_master() -> pd.DataFrame:
     try:
-        df = _df_from_cached(APP_DB_FILE, _DB_MASTER_SHEET, _file_mtime_ns(APP_DB_FILE), header=_DB_HEADER_ROW - 1)
+        return refdb.load_app_master_df()
     except Exception:
         return pd.DataFrame()
 
-    if _DB_LANG_COL not in df.columns or _DB_URL_COL not in df.columns:
-        return pd.DataFrame()
-
-    df = df[df[_DB_LANG_COL].astype(str).str.strip().str.lower()
-            != _DB_LANG_COL.lower()]
-
-    df[_DB_LANG_COL] = df[_DB_LANG_COL].ffill()
-
-    df = df[df[_DB_URL_COL].notna()]
-    df = df[~df[_DB_URL_COL].astype(str).str.strip().str.lower().isin(_DB_JUNK)]
-    df = df.reset_index(drop=True)
-    return df
-
 
 def _load_db_records() -> list[dict]:
-    df = _load_db_master()
-    out: list[dict] = []
-    if df.empty:
-        return out
-    for _, row in df.iterrows():
-        lang = str(row[_DB_LANG_COL]).strip()
-        url  = str(row[_DB_URL_COL]).strip()
-        if not lang or not url or _clean_url(url) in _DB_JUNK:
-            continue
-        out.append({"language": lang, "url": url})
-    return out
+    try:
+        return refdb.load_db_records()
+    except Exception:
+        return []
 
 
 def list_db_languages() -> list[str]:
     try:
-        df = _load_db_master()
-        if df.empty or _DB_LANG_COL not in df.columns:
-            return []
-        seen: set[str] = set()
-        order: list[str] = []
-        for val in df[_DB_LANG_COL].dropna().astype(str).tolist():
-            s = str(val).strip()
-            if not s or s.lower() == _DB_LANG_COL.lower():
-                continue
-            key = _norm_lang(s)
-            if key in seen:
-                continue
-            seen.add(key)
-            order.append(s)
-        return order
+        return refdb.list_db_languages()
     except Exception:
         return []
 
@@ -2234,51 +2157,19 @@ def _find_language_row_range(ws, language: str) -> tuple[int, int] | None:
 
 
 def add_language_to_db(language: str) -> bool:
-    language = str(language or "").strip()
-    if not language:
+    try:
+        return refdb.add_language_to_db(language)
+    except Exception as e:
+        print(f"[DB] add_language_to_db failed for {language}: {e}")
         return False
-
-    with _DB_LOCK:
-        try:
-            wb = openpyxl.load_workbook(APP_DB_FILE)
-            ws = wb[_DB_MASTER_SHEET] if _DB_MASTER_SHEET in wb.sheetnames else wb.active
-            if _find_language_row_range(ws, language) is not None:
-                wb.close()
-                return False
-            last_row = ws.max_row + 1
-            ws.cell(row=last_row, column=1, value=1)
-            ws.cell(row=last_row, column=2, value="")
-            ws.cell(row=last_row, column=3, value=language)
-            wb.save(APP_DB_FILE)
-            wb.close()
-            return True
-        except Exception as e:
-            print(f"[DB] add_language_to_db failed for {language}: {e}")
-            return False
 
 
 def remove_language_from_db(language: str) -> bool:
-    language = str(language or "").strip()
-    if not language:
+    try:
+        return refdb.remove_language_from_db(language)
+    except Exception as e:
+        print(f"[DB] remove_language_from_db failed for {language}: {e}")
         return False
-
-    with _DB_LOCK:
-        try:
-            wb = openpyxl.load_workbook(APP_DB_FILE)
-            ws = wb[_DB_MASTER_SHEET] if _DB_MASTER_SHEET in wb.sheetnames else wb.active
-            rng = _find_language_row_range(ws, language)
-            if rng is None:
-                wb.close()
-                return False
-            start_r, end_r = rng
-            count = end_r - start_r + 1
-            ws.delete_rows(start_r, count)
-            wb.save(APP_DB_FILE)
-            wb.close()
-            return True
-        except Exception as e:
-            print(f"[DB] remove_language_from_db failed for {language}: {e}")
-            return False
 
 
 # -- HTML Report Generator ---------------------------------------------------
@@ -2606,14 +2497,22 @@ def add_cors(response):
 @app.route("/db-sheets", methods=["GET"])
 def db_sheets():
     names = get_db_sheet_names()
-    return jsonify({"sheets": names})
+    return jsonify({
+        "sheets": names,
+        "db_sheets": names,
+        "data": names,
+    })
 
 
 # Expose City DB sheet names for city dropdown
 @app.route("/city-sheets", methods=["GET"])
 def city_sheets_route():
     names = get_city_db_sheet_names()
-    return jsonify({"sheets": names})
+    return jsonify({
+        "sheets": names,
+        "city_sheets": names,
+        "data": names,
+    })
 
 
 
@@ -2677,12 +2576,16 @@ def status(job_id):
     job = jobs.get(job_id)
     if not job:
         return jsonify({"error": "Unknown job"}), 404
+    app_info = job.get("app_info") or {}
+    screenshot_urls = app_info.get("validated_urls") or app_info.get("newly_appended_urls") or []
     base_url = request.host_url.rstrip("/")
     return jsonify({
         "status":           job["status"],
         "error":            job.get("error"),
         "city_info":        job.get("city_info"),
         "app_info":         job.get("app_info"),
+        "screenshot_urls":  screenshot_urls,
+        "screenshotUrls":   screenshot_urls,
         "download_url":     f"{base_url}/download/{job_id}" if job["status"] == "done" else None,
         "download_html_url":f"{base_url}/download-html/{job_id}" if job["status"] == "done" else None,
         "view_url":         f"{base_url}/report/{job_id}" if job["status"] == "done" else None,
@@ -2694,12 +2597,16 @@ def debug_job(job_id):
     job = jobs.get(job_id)
     if not job:
         return jsonify({"error": "Unknown job"}), 404
+    app_info = job.get("app_info") or {}
+    screenshot_urls = app_info.get("validated_urls") or app_info.get("newly_appended_urls") or []
     return jsonify({
         "status":      job["status"],
         "error":       job.get("error"),
         "html_output": job.get("html_output"),
         "city_info":   job.get("city_info"),
         "app_info":    job.get("app_info"),
+        "screenshot_urls": screenshot_urls,
+        "screenshotUrls":  screenshot_urls,
     })
 
 
@@ -2793,11 +2700,15 @@ def remove_language_route(language: str):
 
 @app.route("/")
 def index():
-    frontend_dir = BASE_DIR.parent / "Final_Report_Frontend"
-    return send_file(frontend_dir / "index.html")
+    return jsonify({
+        "ok": True,
+        "service": "backend",
+        "message": "FileForge backend is running",
+    })
 
 # -- Entry point ---------------------------------------------------------------
 if __name__ == "__main__":
     print("-  Ad Campaign Report Server running at http://localhost:5000")
-    print("    Open http://localhost:5000 in your browser (do NOT open Index.html directly).")
-    app.run(debug=True, port=5000)
+    print("[DEV] NEW CODE LOADED")
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", debug=False, use_reloader=False, port=port)

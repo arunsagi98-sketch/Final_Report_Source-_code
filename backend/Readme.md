@@ -3,8 +3,13 @@
 
 ### 1. Install dependencies
 ```bash
-pip install flask openpyxl pandas werkzeug
+pip install flask openpyxl pandas werkzeug psycopg2-binary
 ```
+
+### 1b. Configure PostgreSQL
+- Create a PostgreSQL database
+- Set `DATABASE_URL` in your environment or `.env`
+- The first app start will bootstrap the reference data from `db/*.xlsx`
 
 ### 2. Start the backend
 ```bash
@@ -12,22 +17,21 @@ python app.py
 ```
 You should see: `🚀  File Automation Server running at http://localhost:5000`
 
-### 3. Open the frontend
-Just open `index.html` in any browser. No server needed for the frontend.
+For local development, keep `FLASK_DEBUG=True` so code changes auto-reload.
 
 ---
 
 ## How it works
 
 ```
-index.html  ─── POST /upload ───►  app.py (Flask)
+client       ─── POST /upload ───►  app.py (Flask)
                                      │
                                      ├─ saves file to  uploads/
                                      ├─ spawns background thread
                                      └─ processes with pandas + openpyxl
 
-index.html  ─── GET /status/:id ──► returns {"status": "done|processing|error"}
-index.html  ─── GET /download/:id ► streams the .xlsx report
+client       ─── GET /status/:id ──► returns {"status": "done|processing|error"}
+client       ─── GET /download/:id ► streams the .xlsx report
 ```
 
 ## Generated Report Sheets
@@ -54,7 +58,7 @@ Add your own business logic between steps 1 and 3.
 
 ```
 ├── app.py          ← Flask backend
-├── index.html      ← Frontend UI (open in browser)
+├── db/             ← Database/reference Excel files for the app
 ├── uploads/        ← Temporary uploaded files (auto-cleaned)
 └── outputs/        ← Generated reports (auto-cleaned 60s after download)
 ```
@@ -63,3 +67,5 @@ Add your own business logic between steps 1 and 3.
 - Max file size: 50 MB (configurable via `MAX_CONTENT_LENGTH` in app.py)
 - Files are deleted automatically after download
 - CORS is enabled for all origins (restrict in production)
+- Reference data is stored in PostgreSQL
+- The Excel files in `db/` are only seed sources for the initial import
