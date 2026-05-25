@@ -5,3 +5,5 @@ werkzeug
 flask-cors
 gunicorn
 python-dotenv
+asgiref
+uvicorn
