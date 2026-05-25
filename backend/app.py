@@ -2528,7 +2528,7 @@ def build_sheet8_city(matched_df1: pd.DataFrame, matched_df2: pd.DataFrame,
     info = {"warnings": [], "debug": {}, "city_source": ""}
 
     if matched_df1.empty or matched_df2.empty:
-        return pd.DataFrame(columns=["City", "Creative"]), 0, info
+        return [], None, info
 
     creative_col1 = next(
         (c for c in matched_df1.columns if "creative" in c.lower() and "id" not in c.lower()),
@@ -2831,6 +2831,11 @@ def remove_language_route(language: str):
         "languages": list_languages_for_ui(),
     })
 
+
+@app.route("/")
+def index():
+    frontend_dir = BASE_DIR.parent / "Final_Report_Frontend"
+    return send_file(frontend_dir / "index.html")
 
 # -- Entry point ---------------------------------------------------------------
 if __name__ == "__main__":
