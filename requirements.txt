@@ -3,3 +3,5 @@ pandas
 openpyxl
 werkzeug
 flask-cors
+gunicorn
+python-dotenv
