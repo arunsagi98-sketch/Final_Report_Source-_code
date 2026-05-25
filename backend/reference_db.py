@@ -23,6 +23,9 @@ URL_COL = "URL / App Name"
 LANG_COL = "Language or Line Item"
 JUNK_VALUES = {"nan", "none", "", "app/url", "app", "url", "site", "domain", URL_COL.lower()}
 
+_APP_FALLBACK_PATH: Path | None = None
+_CITY_FALLBACK_PATH: Path | None = None
+
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS reference_sheets (
@@ -112,6 +115,21 @@ def _database_url() -> str:
     return f"postgresql://{auth}{host}:{port}/{name}"
 
 
+def postgres_configured() -> bool:
+    """Return True only when PostgreSQL settings are present."""
+    url = os.getenv("DATABASE_URL", "").strip()
+    if url:
+        return True
+    return bool(os.getenv("PGDATABASE", "").strip() and os.getenv("PGUSER", "").strip())
+
+
+def configure_fallback_paths(app_excel_path: str | Path | None = None, city_excel_path: str | Path | None = None) -> None:
+    """Register workbook paths used when PostgreSQL is not configured."""
+    global _APP_FALLBACK_PATH, _CITY_FALLBACK_PATH
+    _APP_FALLBACK_PATH = Path(app_excel_path) if app_excel_path else None
+    _CITY_FALLBACK_PATH = Path(city_excel_path) if city_excel_path else None
+
+
 def _require_driver() -> None:
     if psycopg2 is None:
         raise RuntimeError(
@@ -130,10 +148,40 @@ def _connect():
 
 
 def ensure_schema() -> None:
+    if not postgres_configured() or psycopg2 is None:
+        return
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(SCHEMA_SQL)
         conn.commit()
+
+
+def _load_workbook_sheet_df(excel_path: str | Path | None, sheet_name: str, header: int | None = 0) -> pd.DataFrame:
+    if not excel_path:
+        return pd.DataFrame()
+    excel_path = Path(excel_path)
+    if not excel_path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_excel(excel_path, sheet_name=sheet_name, header=header)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _workbook_sheet_names(excel_path: str | Path | None, exclude_summary: bool = False) -> list[str]:
+    if not excel_path:
+        return []
+    excel_path = Path(excel_path)
+    if not excel_path.exists():
+        return []
+    try:
+        xls = pd.ExcelFile(excel_path)
+        names = list(xls.sheet_names)
+        if exclude_summary:
+            names = [name for name in names if name.strip().lower() != "summary by state"]
+        return names
+    except Exception:
+        return []
 
 
 def _sheet_exists(conn, kind: str, sheet_name: str) -> bool:
@@ -282,6 +330,9 @@ def import_workbook_to_postgres(excel_path: str | Path, kind: str, header: int) 
 
 
 def bootstrap_reference_data(app_excel_path: str | Path, city_excel_path: str | Path) -> None:
+    configure_fallback_paths(app_excel_path, city_excel_path)
+    if not postgres_configured() or psycopg2 is None:
+        return
     ensure_schema()
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -298,6 +349,12 @@ def bootstrap_reference_data(app_excel_path: str | Path, city_excel_path: str | 
 
 
 def list_sheet_names(kind: str) -> list[str]:
+    if not postgres_configured() or psycopg2 is None:
+        if kind == APP_KIND:
+            return _workbook_sheet_names(_APP_FALLBACK_PATH)
+        if kind == CITY_KIND:
+            return _workbook_sheet_names(_CITY_FALLBACK_PATH, exclude_summary=True)
+        return []
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -314,6 +371,12 @@ def list_sheet_names(kind: str) -> list[str]:
 
 
 def load_sheet_df(kind: str, sheet_name: str) -> pd.DataFrame:
+    if not postgres_configured() or psycopg2 is None:
+        if kind == APP_KIND:
+            return _load_workbook_sheet_df(_APP_FALLBACK_PATH, sheet_name, header=1)
+        if kind == CITY_KIND:
+            return _load_workbook_sheet_df(_CITY_FALLBACK_PATH, sheet_name, header=0)
+        return pd.DataFrame()
     with _connect() as conn:
         return _load_sheet_df(conn, kind, sheet_name)
 
@@ -327,14 +390,7 @@ def get_app_sheet_names() -> list[str]:
 
 
 def fallback_app_sheet_names_from_workbook(excel_path: str | Path) -> list[str]:
-    excel_path = Path(excel_path)
-    if not excel_path.exists():
-        return []
-    try:
-        xls = pd.ExcelFile(excel_path)
-        return list(xls.sheet_names)
-    except Exception:
-        return []
+    return _workbook_sheet_names(excel_path)
 
 
 def get_app_urls_from_sheets(sheet_names_str: str) -> list[str]:
@@ -366,6 +422,9 @@ def _current_master_language(df: pd.DataFrame) -> str | None:
 
 def append_app_urls_to_sheet(sheet_name: str, new_urls: list[str]) -> None:
     if not new_urls:
+        return
+
+    if not postgres_configured() or psycopg2 is None:
         return
 
     with _connect() as conn:
@@ -414,6 +473,13 @@ def append_app_urls_to_sheet(sheet_name: str, new_urls: list[str]) -> None:
 
 
 def load_app_master_df() -> pd.DataFrame:
+    if not postgres_configured() or psycopg2 is None:
+        df = _load_workbook_sheet_df(_APP_FALLBACK_PATH, MASTER_SHEET, header=1)
+        if df.empty:
+            return df
+        if LANG_COL in df.columns:
+            df[LANG_COL] = df[LANG_COL].ffill()
+        return df
     df = load_app_sheet(MASTER_SHEET)
     if df.empty:
         return df
@@ -462,6 +528,9 @@ def add_language_to_db(language: str) -> bool:
     if not language:
         return False
 
+    if not postgres_configured() or psycopg2 is None:
+        return False
+
     with _connect() as conn:
         df = _load_sheet_df(conn, APP_KIND, MASTER_SHEET)
         if not df.empty and LANG_COL in df.columns:
@@ -490,6 +559,9 @@ def add_language_to_db(language: str) -> bool:
 def remove_language_from_db(language: str) -> bool:
     language = str(language or "").strip()
     if not language:
+        return False
+
+    if not postgres_configured() or psycopg2 is None:
         return False
 
     with _connect() as conn:
@@ -521,19 +593,14 @@ def remove_language_from_db(language: str) -> bool:
 
 
 def get_city_sheet_names() -> list[str]:
+    if not postgres_configured() or psycopg2 is None:
+        return _workbook_sheet_names(_CITY_FALLBACK_PATH, exclude_summary=True)
     names = list_sheet_names(CITY_KIND)
     return [name for name in names if name.strip().lower() != "summary by state"]
 
 
 def fallback_city_sheet_names_from_workbook(excel_path: str | Path) -> list[str]:
-    excel_path = Path(excel_path)
-    if not excel_path.exists():
-        return []
-    try:
-        xls = pd.ExcelFile(excel_path)
-        return [name for name in xls.sheet_names if name.strip().lower() != "summary by state"]
-    except Exception:
-        return []
+    return _workbook_sheet_names(excel_path, exclude_summary=True)
 
 
 def load_city_db_sheet(sheet_names_str: str) -> list[dict]:

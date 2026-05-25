@@ -104,7 +104,13 @@ if os.getenv("DATABASE_URL") or (os.getenv("PGDATABASE") and os.getenv("PGUSER")
             "Set DATABASE_URL and install psycopg2-binary before starting the app."
         ) from e
 else:
-    print("[WARN] PostgreSQL settings not detected. Set DATABASE_URL to enable the new DB layer.")
+    print("[INFO] PostgreSQL not configured; using workbook fallback for local mode.")
+
+# Make workbook paths available for graceful local fallback when PostgreSQL is not set up.
+try:
+    refdb.configure_fallback_paths(APP_DB_FILE, CITY_REF_FILE)
+except Exception:
+    pass
 
 # -- Excel styling helpers -----------------------------------------------------
 HEADER_BG = "00B0F0"
@@ -537,12 +543,12 @@ def get_db_sheet_names() -> list[str]:
         names = refdb.get_app_sheet_names()
         if names:
             return names
+    except Exception:
+        pass
+    try:
         return refdb.fallback_app_sheet_names_from_workbook(APP_DB_FILE)
     except Exception:
-        try:
-            return refdb.fallback_app_sheet_names_from_workbook(APP_DB_FILE)
-        except Exception:
-            return []
+        return []
 
 
 def get_urls_from_multiple_sheets(sheet_names_str: str) -> list[str]:
@@ -659,6 +665,73 @@ def _clean_li2(val: str) -> str:
 
 def _normalize_city(val: str) -> str:
     return re.sub(r'\s+', ' ', str(val).strip()).title()
+
+
+def _infer_app_sheet_name_from_df(df1: pd.DataFrame | None, selected_sheet: str = "") -> str:
+    """
+    Pick the most relevant App/URL DB sheet using File 1 line-item text.
+    Falls back to selected_sheet, then Master Database, then the first available sheet.
+    """
+    available = refdb.get_app_sheet_names()
+    if not available:
+        available = refdb.fallback_app_sheet_names_from_workbook(APP_DB_FILE)
+    if not available:
+        return selected_sheet.strip()
+
+    def _resolve(candidate: str) -> str:
+        cand = _normalize_text(candidate)
+        for name in available:
+            if _normalize_text(name) == cand:
+                return name
+        return ""
+
+    inferred = ""
+    if df1 is not None and not df1.empty:
+        li_col = detect_line_item_col(df1)
+        if li_col:
+            values = [str(v).strip() for v in df1[li_col].dropna().astype(str).tolist() if str(v).strip()]
+            if values:
+                normalized_available = {_normalize_text(name): name for name in available}
+
+                for raw in values:
+                    n_raw = _normalize_text(raw)
+                    if n_raw in normalized_available:
+                        inferred = normalized_available[n_raw]
+                        break
+                    for key, name in normalized_available.items():
+                        if key in n_raw or n_raw in key:
+                            inferred = name
+                            break
+                    if inferred:
+                        break
+
+                if not inferred:
+                    for raw in values:
+                        n_raw = _normalize_text(raw)
+                        for k, mapped in LANGUAGE_KEYWORDS.items():
+                            if k in n_raw:
+                                resolved = _resolve(mapped)
+                                if resolved:
+                                    inferred = resolved
+                                    break
+                                for name in available:
+                                    if k in _normalize_text(name):
+                                        inferred = name
+                                        break
+                            if inferred:
+                                break
+                        if inferred:
+                            break
+
+    if inferred:
+        return inferred
+
+    if selected_sheet:
+        resolved = _resolve(selected_sheet)
+        if resolved:
+            return resolved
+
+    return _resolve("Master Database") or available[0]
 
 
 def _find_city_column(df: pd.DataFrame, city_names: set[str] | None = None) -> str | None:
@@ -1120,13 +1193,12 @@ def get_city_db_sheet_names() -> list[str]:
         names = refdb.get_city_sheet_names()
         if names:
             return names
+    except Exception:
+        pass
+    try:
         return refdb.fallback_city_sheet_names_from_workbook(CITY_REF_FILE)
-    except Exception as e:
-        print(f"[WARN] get_city_db_sheet_names failed: {e}")
-        try:
-            return refdb.fallback_city_sheet_names_from_workbook(CITY_REF_FILE)
-        except Exception:
-            return []
+    except Exception:
+        return []
 
 
 def load_city_db_sheet(sheet_names_str: str) -> list[dict]:
@@ -1526,6 +1598,7 @@ def build_sheet9_creative(df1: pd.DataFrame, df2: pd.DataFrame,
 # -- Sheet 10 - Apps / URLs ----------------------------------------------------
 
 def build_sheet10_apps(
+    df1: pd.DataFrame | None,
     app_urls_str: str,
     total_imp: int,
     total_clk: int,
@@ -1535,11 +1608,15 @@ def build_sheet10_apps(
     info: dict = {
         "warnings": [],
         "selected_sheet": selected_sheet,
+        "resolved_sheet": "",
         "validated_urls": [],
         "newly_appended_urls": [],
     }
 
     _JUNK = {"nan", "none", "", "app/url", "app", "url", "site", "domain"}
+
+    resolved_sheet = _infer_app_sheet_name_from_df(df1, selected_sheet)
+    info["resolved_sheet"] = resolved_sheet
 
     # Parse user-supplied URLs
     user_apps: list[str] = [
@@ -1547,21 +1624,21 @@ def build_sheet10_apps(
         if _clean_url(u) not in _JUNK
     ]
 
-    # CHANGED: validate against selected sheet only; append if not found
-    all_user_urls, newly_appended = validate_and_prepare_urls(user_apps, selected_sheet)
+    # Validate against the sheet inferred from File 1 line-item language.
+    all_user_urls, newly_appended = validate_and_prepare_urls(user_apps, resolved_sheet)
     info["validated_urls"]      = all_user_urls
     info["newly_appended_urls"] = newly_appended
 
     if newly_appended:
         info["warnings"].append(
-            f"{len(newly_appended)} URL(s) not found in '{selected_sheet}' — "
+            f"{len(newly_appended)} URL(s) not found in '{resolved_sheet}' — "
             "appended to that sheet: " + ", ".join(newly_appended[:5])
             + ("…" if len(newly_appended) > 5 else "")
         )
 
-    # Remaining DB URLs from the selected sheet (excluding user-supplied ones)
+    # Remaining DB URLs from the resolved sheet (excluding user-supplied ones)
     all_user_set  = set(all_user_urls)
-    db_sheet_urls = [u for u in get_urls_from_multiple_sheets(selected_sheet)
+    db_sheet_urls = [u for u in get_urls_from_multiple_sheets(resolved_sheet)
                      if u not in all_user_set and u not in _JUNK]
     random.shuffle(db_sheet_urls)
 
@@ -1573,28 +1650,55 @@ def build_sheet10_apps(
             filler_pool.append(u)
             seen_filler.add(u)
 
-    # CHANGED: Target row count — fully random within impression-based ranges
+    # If the resolved sheet is small, widen the pool using the rest of the DB
+    # sheets so the App/URL sheet still hits the requested row-count buckets.
+    if len(all_user_urls) + len(filler_pool) < 40:
+        fallback_urls = [
+            u for u in get_urls_from_multiple_sheets(" , ".join(get_db_sheet_names()))
+            if u not in all_user_set and u not in seen_filler and u not in _JUNK
+        ]
+        random.shuffle(fallback_urls)
+        for u in fallback_urls:
+            if u not in seen_filler:
+                filler_pool.append(u)
+                seen_filler.add(u)
+
+    # Target row count based on total impressions.
     if total_imp < 50_000:
-        target_count = random.randint(30, 60)
+        target_count = random.randint(40, 50)
+        top_lo, top_hi = 10_000, 12_000
+    elif total_imp < 70_000:
+        target_count = random.randint(50, 60)
+        top_lo, top_hi = 12_000, 15_000
     elif total_imp < 100_000:
-        target_count = random.randint(50, 90)
-    elif total_imp < 200_000:
-        target_count = random.randint(80, 120)
+        target_count = random.randint(60, 70)
+        top_lo, top_hi = 15_000, 20_000
+    elif total_imp < 500_000:
+        target_count = random.randint(110, 120)
+        top_lo, top_hi = 18_000, 35_000
+    elif total_imp < 1_000_000:
+        target_count = random.randint(110, 120)
+        top_lo, top_hi = 40_000, 50_000
     else:
-        target_count = random.randint(110, 150)
+        target_count = random.randint(110, 120)
+        top_lo, top_hi = 70_000, 80_000
 
     real_total = len(all_user_urls) + len(filler_pool)
     if real_total > 0:
-        target_count = min(target_count, real_total)
+        target_count = min(target_count, real_total) if real_total < target_count else target_count
+    target_count = max(target_count, len(all_user_urls))
 
-    # Place up to 15 validated user URLs spread across top 15 positions
+    # Place user URLs first so they stay on top.
     n_val    = len(all_user_urls)
-    num_top  = min(n_val, 15)
+    num_top  = min(n_val, min(20, max(15, n_val)))
     top_val_urls  = all_user_urls[:num_top]
     remaining_val = all_user_urls[num_top:]
 
+    top_block_size = max(15, num_top)
+    top_block_size = min(top_block_size, max(target_count, num_top))
+
     if num_top > 1:
-        zone_size = 15 / num_top
+        zone_size = top_block_size / num_top
         spread_indices: list[int] = []
         for i in range(num_top):
             z_start = int(i * zone_size)
@@ -1605,13 +1709,14 @@ def build_sheet10_apps(
         spread_indices = [random.randint(0, 5)]
     else:
         spread_indices = []
+    user_positions = set(spread_indices)
 
-    top_block: list[str | None] = [None] * 15
+    top_block: list[str | None] = [None] * top_block_size
     for idx, url in zip(spread_indices, top_val_urls):
         top_block[idx] = url
 
     fil_idx = 0
-    for i in range(15):
+    for i in range(top_block_size):
         if top_block[i] is None:
             if fil_idx < len(filler_pool):
                 top_block[i] = filler_pool[fil_idx]
@@ -1631,30 +1736,8 @@ def build_sheet10_apps(
 
     n = len(all_apps)
 
-    # -- Impression Distribution: top-site scaled by total_imp --
-    # Target top-site impression range based on total impressions
-    if total_imp < 50_000:
-        top_lo = max(1_000, int(total_imp * 0.20))
-        top_hi = min(14_000, int(total_imp * 0.26))
-    elif total_imp < 100_000:
-        top_lo = 12_000
-        top_hi = 20_000
-    elif total_imp < 200_000:
-        top_lo = 18_000
-        top_hi = 30_000
-    elif total_imp < 500_000:
-        top_lo = 35_000
-        top_hi = 50_000
-    elif total_imp < 1_000_000:
-        top_lo = 50_000
-        top_hi = 65_000
-    else:
-        top_lo = 70_000
-        top_hi = 85_000
-
-    # Safety: never assign more than 45% of total to top site
-    top_lo = min(top_lo, int(total_imp * 0.38))
-    top_hi = min(top_hi, int(total_imp * 0.45))
+    # Keep the top row strong while staying within the requested ranges.
+    top_hi = min(top_hi, int(total_imp * 0.48)) if total_imp > 0 else top_hi
     if top_lo >= top_hi:
         top_lo = max(1, top_hi - 500)
     top_lo = max(1, top_lo)
@@ -1712,24 +1795,23 @@ def build_sheet10_apps(
 
     ranked_indices = sorted(range(n), key=lambda idx: app_imps[idx], reverse=True)
 
-    # CHANGED: CTR assignment with top 6–8 band (random each run) at 0.45–0.52%
-    # All others at 0.35–0.56%, hard cap 0.56% enforced
-    CTR_MIN   = 0.0035   # 0.35% floor
-    CTR_MAX   = 0.0056   # 0.56% hard cap
-    CTR_TOP_LO = 0.0045  # 0.45% top-band floor
-    CTR_TOP_HI = 0.0052  # 0.52% top-band ceiling
-
-    top_n = random.randint(6, 8)  # random cutoff for premium band each run
+    # User URLs get a tighter CTR band; the rest get a broader band.
+    CTR_USER_LO = 0.0045  # 0.45%
+    CTR_USER_HI = 0.0052  # 0.52%
+    CTR_OTHER_LO = 0.0025  # 0.25%
+    CTR_OTHER_HI = 0.0085  # 0.85%
+    CTR_MIN = CTR_OTHER_LO
+    CTR_MAX = CTR_OTHER_HI
 
     raw_clks: list[float] = [0.0] * n
-    for rank, idx in enumerate(ranked_indices, 1):
-        imp = app_imps[idx]
+    for idx, imp in enumerate(app_imps):
         if imp < 180:
             continue
-        if rank <= top_n:
-            raw_clks[idx] = imp * random.uniform(CTR_TOP_LO, CTR_TOP_HI)
+        if idx in user_positions:
+            raw_clks[idx] = imp * random.uniform(CTR_USER_LO, CTR_USER_HI)
         else:
-            raw_clks[idx] = imp * random.uniform(CTR_MIN, CTR_MAX)
+            # Keep non-user rows within the requested wider band.
+            raw_clks[idx] = imp * random.uniform(CTR_OTHER_LO, CTR_OTHER_HI)
 
     w_clk = sum(raw_clks) or float(n)
     app_clks = largest_remainder(raw_clks, w_clk, total_clk, min_val=0)
@@ -1971,7 +2053,7 @@ def process_file(job_id: str, filepath1: Path, filepath2: Path | None,
         # CHANGED: pass selected_sheet to build_sheet10_apps
         ws10 = wb.create_sheet("APP URL")
         s10, s10t, app_info = build_sheet10_apps(
-            app_urls, total_imp, total_clk, selected_sheet
+            df1, app_urls, total_imp, total_clk, selected_sheet
         )
         h10 = ["App/URL", "Impressions", "Clicks", "Click Rate (CTR)"]
         f10 = {"Click Rate (CTR)": "{Clicks}/{Impressions}"}
