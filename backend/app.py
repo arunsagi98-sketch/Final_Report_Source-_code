@@ -2516,6 +2516,152 @@ def city_sheets_route():
     return jsonify({"sheets": names})
 
 
+def build_sheet8_city(matched_df1: pd.DataFrame, matched_df2: pd.DataFrame,
+                      total_imp: int, city_db_sheet: str, is_banner: bool = False):
+    """
+    Deterministic city breakdown.
+    Keeps all unique cities from the filtered source rows.
+    City DB data is only used to enrich creatives when available.
+    """
+    info = {"warnings": [], "debug": {}, "city_source": ""}
+
+    if matched_df1.empty or matched_df2.empty:
+        return pd.DataFrame(columns=["City", "Creative"]), 0, info
+
+    creative_col1 = next(
+        (c for c in matched_df1.columns if "creative" in c.lower() and "id" not in c.lower()),
+        matched_df1.columns[0],
+    )
+
+    city_col = None
+    for col in matched_df2.columns:
+        if str(col).strip().lower() == "city":
+            city_col = col
+            break
+    if city_col is None:
+        for col in matched_df2.columns:
+            if "city" in str(col).strip().lower():
+                city_col = col
+                break
+
+    if city_col is None:
+        info["warnings"].append("No 'City' column detected in File 2.")
+        return pd.DataFrame(columns=["City", "Creative"]), 0, info
+
+    weight_col2 = next(
+        (c for c in matched_df2.columns if "impression" in c.lower() or "weight" in c.lower()),
+        None,
+    )
+    if weight_col2 is None:
+        numeric_candidates = [
+            c for c in matched_df2.columns
+            if pd.api.types.is_numeric_dtype(matched_df2[c])
+        ]
+        weight_col2 = numeric_candidates[0] if numeric_candidates else matched_df2.columns[-1]
+
+    li_col2 = next((c for c in matched_df2.columns if "line item" in c.lower()), matched_df2.columns[0])
+    li_col1 = next((c for c in matched_df1.columns if "line item" in c.lower()), matched_df1.columns[0])
+
+    db_cities_raw = load_city_db_sheet(city_db_sheet)
+    if not db_cities_raw:
+        db_cities_raw = load_city_db_sheet("Master Database")
+        if db_cities_raw:
+            info["warnings"].append(f"Sheet '{city_db_sheet}' not found. Using Master Database.")
+    db_lookup = {c["name"].strip().lower(): c for c in db_cities_raw}
+
+    target_li_names = {
+        str(v).strip()
+        for v in matched_df1[li_col1].dropna().astype(str).unique()
+        if str(v).strip()
+    }
+
+    def normalize_line_item(val: object) -> str:
+        val_str = str(val).strip()
+        if "|" in val_str:
+            val_str = val_str.split("|", 1)[1].strip()
+        return val_str
+
+    filtered_df2 = matched_df2[matched_df2[li_col2].apply(lambda v: normalize_line_item(v) in target_li_names)].copy()
+    info["debug"]["target_line_items"] = sorted(target_li_names)
+    info["debug"]["filtered_rows"] = len(filtered_df2)
+
+    if filtered_df2.empty:
+        info["warnings"].append("No exact Line Item matches found after normalization. Using all data as fallback.")
+        filtered_df2 = matched_df2.copy()
+
+    city_groups = filtered_df2.groupby(city_col, dropna=False).agg({
+        weight_col2: "sum",
+        li_col2: lambda x: sorted({
+            normalize_line_item(v)
+            for v in x.dropna().astype(str)
+            if normalize_line_item(v)
+        }),
+    }).reset_index()
+
+    input_cities_map = {}
+    for _, row in city_groups.iterrows():
+        name = str(row[city_col]).strip()
+        if name and name.lower() not in {"nan", "none", ""}:
+            input_cities_map[name.lower()] = {
+                "name": name,
+                "weight": safe_float(row[weight_col2]),
+                "creatives": row[li_col2],
+            }
+
+    final_cities = []
+    for city_key, inp in input_cities_map.items():
+        db_city = db_lookup.get(city_key)
+        final_cities.append({
+            "name": inp["name"],
+            "weight": inp["weight"],
+            "creatives": db_city["creatives"] if db_city and db_city["creatives"] else inp["creatives"],
+        })
+
+    final_cities.sort(key=lambda x: x["weight"], reverse=True)
+
+    all_f1_creatives = sorted(list(set(matched_df1[creative_col1].dropna().astype(str))))
+    if not all_f1_creatives:
+        all_f1_creatives = ["Default Creative"]
+
+    rows = []
+    for city_info in final_cities:
+        city_name = city_info["name"]
+        city_weight = max(city_info["weight"], 1.0)
+        city_creatives = city_info["creatives"] or all_f1_creatives
+        weight_per_cr = city_weight / len(city_creatives)
+        for cr in city_creatives:
+            rows.append({
+                "City": city_name,
+                "Creative": cr,
+                "_weight": weight_per_cr,
+            })
+
+    if not rows:
+        for city_name in ["Sydney", "Melbourne", "Brisbane", "Perth"]:
+            rows.append({"City": city_name, "Creative": all_f1_creatives[0], "_weight": 1.0})
+
+    df_rows = pd.DataFrame(rows)
+    total_weight = df_rows["_weight"].sum()
+    scaled_imps = _largest_remainder(df_rows["_weight"].tolist(), total_weight, total_imp)
+
+    df_rows["Impressions"] = scaled_imps
+    df_rows["Clicks"] = _distribute_clicks(scaled_imps)
+
+    final_df = df_rows.drop(columns=["_weight"])
+    total_clk_sum = int(df_rows["Clicks"].sum())
+    total_row = {
+        "City": "Grand Total",
+        "Creative": "",
+        "Impressions": total_imp,
+        "Clicks": total_clk_sum,
+        "Click Rate (CTR)": pct(total_clk_sum, total_imp),
+    }
+
+    info["cities_found"] = len(final_df["City"].drop_duplicates())
+    info["city_source"] = "input"
+    return final_df.to_dict(orient="records"), total_row, info
+
+
 @app.route("/upload", methods=["POST", "OPTIONS"])
 def upload():
     print(f"\n[DEBUG] --- New upload request received ---")
