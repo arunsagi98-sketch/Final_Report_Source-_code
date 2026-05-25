@@ -59,8 +59,10 @@ app = Flask(__name__)
 CORS(app)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
-UPLOAD_DIR = Path("uploads")
-OUTPUT_DIR = Path("outputs")
+BASE_DIR = Path(__file__).resolve().parent
+
+UPLOAD_DIR = BASE_DIR / "uploads"
+OUTPUT_DIR = BASE_DIR / "outputs"
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 MAX_REPORT_AGE = 60 * 60 * 24  # keep generated outputs for 24 hours
@@ -68,8 +70,8 @@ MAX_REPORT_AGE = 60 * 60 * 24  # keep generated outputs for 24 hours
 ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 jobs: dict[str, dict] = {}
 
-APP_DB_FILE        = "data/App_Url Data base.xlsx"
-CITY_REF_FILE      = "data/City for Aoutomation.xlsx"
+APP_DB_FILE        = str(BASE_DIR / "data" / "App_Url Data base.xlsx")
+CITY_REF_FILE      = str(BASE_DIR / "data" / "City for Aoutomation.xlsx")
 CITY_REF_SHEET     = "Master Database"
 
 # -- Excel styling helpers -----------------------------------------------------
