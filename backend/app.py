@@ -1171,7 +1171,7 @@ def build_sheet8_city(matched_df1: pd.DataFrame, matched_df2: pd.DataFrame,
 
     if city_col is None:
         info["warnings"].append("No 'City' column detected in File 2.")
-        return pd.DataFrame(columns=["City", "Creative"]), 0, info
+        return [], None, info
 
     # ── Phase 3: Load City DB Sheet ───────────────────────────────────────────
     db_cities_raw = load_city_db_sheet(city_db_sheet)
@@ -2548,7 +2548,7 @@ def build_sheet8_city(matched_df1: pd.DataFrame, matched_df2: pd.DataFrame,
 
     if city_col is None:
         info["warnings"].append("No 'City' column detected in File 2.")
-        return pd.DataFrame(columns=["City", "Creative"]), 0, info
+        return [], None, info
 
     weight_col2 = next(
         (c for c in matched_df2.columns if "impression" in c.lower() or "weight" in c.lower()),
@@ -2808,8 +2808,13 @@ def list_languages_route():
 def add_language_route():
     if request.method == "OPTIONS":
         return jsonify({}), 200
-    data = request.get_json(silent=True) or {}
-    language = str(data.get("language", "")).strip()
+    data = request.get_json(silent=True)
+    if isinstance(data, dict):
+        language = str(data.get("language", "")).strip()
+    elif isinstance(data, str):
+        language = data.strip()
+    else:
+        language = str(request.form.get("language", "")).strip()
     if not language:
         return jsonify({"error": "language required"}), 400
     added = add_language_to_db(language)
