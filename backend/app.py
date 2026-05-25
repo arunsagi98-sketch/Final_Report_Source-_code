@@ -12,6 +12,7 @@ import time
 import random
 import threading
 import base64
+from functools import lru_cache
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -73,6 +74,13 @@ jobs: dict[str, dict] = {}
 APP_DB_FILE        = str(BASE_DIR / "data" / "App_Url Data base.xlsx")
 CITY_REF_FILE      = str(BASE_DIR / "data" / "City for Aoutomation.xlsx")
 CITY_REF_SHEET     = "Master Database"
+_HTML_LOGO_PATH    = BASE_DIR / "assets" / "BILLION TAGS PNG white.png"
+_HTML_LOGO_DATA    = ""
+if _HTML_LOGO_PATH.exists():
+    try:
+        _HTML_LOGO_DATA = base64.b64encode(_HTML_LOGO_PATH.read_bytes()).decode("ascii")
+    except Exception:
+        _HTML_LOGO_DATA = ""
 
 # -- Excel styling helpers -----------------------------------------------------
 HEADER_BG = "00B0F0"
@@ -169,8 +177,6 @@ def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=Non
             cell.alignment = Alignment(horizontal=target, vertical="center")
             cell.border = _thin_border()
 
-    style_data(ws, 2, 2 + len(rows), len(headers))
-
     # Write total row
     if total_row:
         t_row = 2 + len(rows)
@@ -248,19 +254,32 @@ def _distribute_clicks(impressions: list[int], ctr_min: float = 0.0035, ctr_max:
 def safe_float(val, default=0.0):
     if val is None:
         return default
+    try:
+        if pd.isna(val):
+            return default
+    except Exception:
+        pass
     s = str(val).strip().replace(',', '').replace(' ', '')
+    if s.lower() in {"", "nan", "none", "<na>", "na", "null"}:
+        return default
     if s.endswith('%'):
         try:
-            return float(s[:-1]) / 100.0
+            out = float(s[:-1]) / 100.0
+            return out if math.isfinite(out) else default
         except ValueError:
             return default
     try:
-        return float(s)
+        out = float(s)
+        return out if math.isfinite(out) else default
     except ValueError:
         return default
 
 def safe_int(val, default=0):
-    return int(safe_float(val, default))
+    try:
+        out = safe_float(val, default)
+        return int(out) if math.isfinite(out) else int(default)
+    except (TypeError, ValueError, OverflowError):
+        return int(default)
 
 def serial_to_date(serial):
     try:
@@ -361,14 +380,52 @@ _DB_LANG_COL = "Language or Line Item"
 _DB_JUNK     = {"nan", "none", "", "app/url", "app", "url", "url / app name"}
 
 
+def _file_mtime_ns(path: str) -> int:
+    try:
+        return Path(path).stat().st_mtime_ns
+    except Exception:
+        return 0
+
+
+@lru_cache(maxsize=8)
+def _cached_sheetnames(path: str, mtime_ns: int) -> tuple[str, ...]:
+    wb = openpyxl.load_workbook(path, read_only=True)
+    try:
+        return tuple(wb.sheetnames)
+    finally:
+        wb.close()
+
+
+@lru_cache(maxsize=32)
+def _cached_read_excel(path: str, sheet_name: str, mtime_ns: int, header: int | None = None) -> tuple[tuple[str, ...], tuple[tuple[object, ...], ...]]:
+    df = pd.read_excel(path, sheet_name=sheet_name, header=header)
+    return tuple(df.columns.tolist()), tuple(tuple(row) for row in df.itertuples(index=False, name=None))
+
+
+def _df_from_cached(path: str, sheet_name: str, mtime_ns: int, header: int | None = None) -> pd.DataFrame:
+    cols, rows = _cached_read_excel(path, sheet_name, mtime_ns, header=header)
+    return pd.DataFrame(list(rows), columns=list(cols))
+
+
+@lru_cache(maxsize=64)
+def _cached_urls_from_sheet(path: str, sheet_name: str, mtime_ns: int) -> tuple[str, ...]:
+    df = _df_from_cached(path, sheet_name, mtime_ns, header=1)
+    if df.empty or _DB_URL_COL not in df.columns:
+        return ()
+    out: list[str] = []
+    for u in df[_DB_URL_COL].dropna().astype(str).tolist():
+        cleaned = _clean_url(u)
+        if cleaned and cleaned not in _DB_JUNK:
+            out.append(cleaned)
+    return tuple(out)
+
+
 def _resolve_sheet_name(sheet_name: str) -> str | None:
     """Return the exact sheet name in the DB file, using case-insensitive match."""
     if not sheet_name or not sheet_name.strip():
         return None
     try:
-        wb = openpyxl.load_workbook(APP_DB_FILE, read_only=True)
-        names = wb.sheetnames
-        wb.close()
+        names = _cached_sheetnames(APP_DB_FILE, _file_mtime_ns(APP_DB_FILE))
         # Exact match first
         if sheet_name in names:
             return sheet_name
@@ -388,8 +445,7 @@ def _load_db_sheet(sheet_name: str) -> pd.DataFrame:
     if not resolved:
         return pd.DataFrame()
     try:
-        df = pd.read_excel(APP_DB_FILE, sheet_name=resolved, header=1)
-        return df
+        return _df_from_cached(APP_DB_FILE, resolved, _file_mtime_ns(APP_DB_FILE), header=1)
     except Exception:
         return pd.DataFrame()
 
@@ -397,10 +453,7 @@ def _load_db_sheet(sheet_name: str) -> pd.DataFrame:
 def get_db_sheet_names() -> list[str]:
     """Return all sheet names from the DB file for the UI dropdown."""
     try:
-        wb = openpyxl.load_workbook(APP_DB_FILE, read_only=True)
-        names = wb.sheetnames
-        wb.close()
-        return names
+        return list(_cached_sheetnames(APP_DB_FILE, _file_mtime_ns(APP_DB_FILE)))
     except Exception:
         return []
 
@@ -409,16 +462,12 @@ def get_urls_from_multiple_sheets(sheet_names_str: str) -> list[str]:
     """Return all cleaned URLs from multiple DB sheets, merged and deduplicated."""
     if not sheet_names_str: return []
     sheet_names = [s.strip() for s in sheet_names_str.split(",") if s.strip()]
-    
+
     all_urls = set()
+    mtime_ns = _file_mtime_ns(APP_DB_FILE)
     for sn in sheet_names:
-        df = _load_db_sheet(sn)
-        if df.empty or _DB_URL_COL not in df.columns:
-            continue
-        for u in df[_DB_URL_COL].dropna().astype(str).tolist():
-            cleaned = _clean_url(u)
-            if cleaned and cleaned not in _DB_JUNK:
-                all_urls.add(cleaned)
+        for cleaned in _cached_urls_from_sheet(APP_DB_FILE, sn, mtime_ns):
+            all_urls.add(cleaned)
     return list(all_urls)
 
 
@@ -571,6 +620,106 @@ def _clean_li2(val: str) -> str:
 
 def _normalize_city(val: str) -> str:
     return re.sub(r'\s+', ' ', str(val).strip()).title()
+
+
+def _find_city_column(df: pd.DataFrame, city_names: set[str] | None = None) -> str | None:
+    """
+    Try to detect a city column from headers first, then from cell values.
+    This is tolerant of labels like 'Geo City', 'Location City', 'City Name',
+    or exports where the header row is messy but the data clearly contains cities.
+    """
+    if df is None or df.empty:
+        return None
+
+    def _norm_col_name(col: object) -> str:
+        return re.sub(r'[^a-z0-9]+', ' ', str(col).strip().lower()).strip()
+
+    header_patterns = (
+        "city",
+        "city name",
+        "geo city",
+        "location city",
+        "site city",
+        "market city",
+        "town",
+    )
+
+    for col in df.columns:
+        norm = _norm_col_name(col)
+        if not norm:
+            continue
+        if norm == "city" or any(p == norm for p in header_patterns):
+            return col
+        if "city" in norm:
+            return col
+
+    if city_names:
+        city_lookup = {
+            _normalize_city(name).strip().lower()
+            for name in city_names
+            if str(name).strip()
+        }
+        best_col = None
+        best_score = 0.0
+        for col in df.columns:
+            series = df[col].dropna().astype(str).head(60)
+            if series.empty:
+                continue
+            matches = 0
+            considered = 0
+            for raw_val in series:
+                s = str(raw_val).strip()
+                if not s or s.lower() in {"nan", "none"}:
+                    continue
+                considered += 1
+                if _normalize_city(s).strip().lower() in city_lookup:
+                    matches += 1
+            if considered == 0:
+                continue
+            score = matches / considered
+            if score > best_score:
+                best_score = score
+                best_col = col
+        if best_col is not None and best_score >= 0.35:
+            return best_col
+
+    return None
+
+
+def _find_postcode_column(df: pd.DataFrame) -> str | None:
+    """Detect postcode / zip-style geography columns when city is unavailable."""
+    if df is None or df.empty:
+        return None
+
+    header_patterns = (
+        "zip",
+        "zip code",
+        "zipcode",
+        "postal",
+        "postal code",
+        "postcode",
+        "post code",
+    )
+
+    for col in df.columns:
+        norm = re.sub(r'[^a-z0-9]+', ' ', str(col).strip().lower()).strip()
+        if not norm:
+            continue
+        if norm in header_patterns:
+            return col
+        if "zip" in norm or "postal" in norm or "postcode" in norm:
+            return col
+
+    return None
+
+
+def _normalize_postcode(val: object) -> str:
+    s = str(val).strip()
+    if not s or s.lower() in {"nan", "none"}:
+        return ""
+    if re.fullmatch(r"\d+\.0+", s):
+        return s.split(".", 1)[0]
+    return s
 
 
 # -- Sheet builders ------------------------------------------------------------
@@ -930,8 +1079,8 @@ def get_city_db_sheet_names() -> list[str]:
     """Return sheet names from City for Automation.xlsx, excluding summary sheets."""
     EXCLUDE = {"summary by state"}
     try:
-        xl = pd.ExcelFile(CITY_REF_FILE)
-        return [s for s in xl.sheet_names if s.strip().lower() not in EXCLUDE]
+        names = _cached_sheetnames(CITY_REF_FILE, _file_mtime_ns(CITY_REF_FILE))
+        return [s for s in names if s.strip().lower() not in EXCLUDE]
     except Exception as e:
         print(f"[WARN] get_city_db_sheet_names failed: {e}")
         return []
@@ -948,11 +1097,13 @@ def load_city_db_sheet(sheet_names_str: str) -> list[dict]:
     seen_cities = {} # city_lower -> {'name': str, 'weight': float, 'creatives': set()}
     
     try:
-        xl = pd.ExcelFile(CITY_REF_FILE)
+        available_sheets = set(_cached_sheetnames(CITY_REF_FILE, _file_mtime_ns(CITY_REF_FILE)))
+        mtime_ns = _file_mtime_ns(CITY_REF_FILE)
         for sn in sheet_names:
-            if sn not in xl.sheet_names:
+            if sn not in available_sheets:
                 continue
-            df = pd.read_excel(xl, sheet_name=sn)
+            cols, rows = _cached_read_excel(CITY_REF_FILE, sn, mtime_ns, header=0)
+            df = pd.DataFrame(list(rows), columns=list(cols))
             if "City" not in df.columns:
                 continue
             
@@ -1010,7 +1161,7 @@ def _load_city_reference(n_cities: int = 50) -> list[tuple[str, float]]:
     Uses 'Potential Impressions' as weight. Returns [(city_name, weight), ...].
     """
     try:
-        df = pd.read_excel(CITY_REF_FILE, sheet_name=CITY_REF_SHEET)
+        df = _df_from_cached(CITY_REF_FILE, CITY_REF_SHEET, _file_mtime_ns(CITY_REF_FILE), header=0)
         if "City" not in df.columns:
             return []
         weight_col = next(
@@ -1034,10 +1185,11 @@ def _load_city_reference(n_cities: int = 50) -> list[tuple[str, float]]:
 
 # -- Sheet 8 - City -----------------------------------------------------------
 
-def build_sheet8_city(df1: pd.DataFrame, df2: pd.DataFrame,
-                      total_imp: int, total_clk: int, ctr_reach: str,
-                      city_db_sheet: str = "Master Database",
-                      is_banner: bool = False):
+def build_sheet8_city(df1, df2,
+                      total_imp, total_clk, ctr_reach,
+                      city_db_sheet="Master Database",
+                      is_banner=False):
+    """Sheet 8: Distribution by City + Creative."""
     info = {
         "matched_line_items": 0,
         "cities_found": 0,
@@ -1046,64 +1198,15 @@ def build_sheet8_city(df1: pd.DataFrame, df2: pd.DataFrame,
         "debug": {}
     }
 
-    # ── Shared distribution helpers ───────────────────────────────────────────
-    def _largest_remainder(weights, w_total, total):
-        if not weights or w_total == 0: return []
-        exact   = [(w / w_total) * total for w in weights]
-        floored = (
-            [int(e) for e in exact]
-            if total < len(weights)
-            else [max(1, int(e)) if w > 0 else 0 for w, e in zip(weights, exact)]
-        )
-        remainder = total - sum(floored)
-        fracs = [e - int(e) for e in exact]
-        order = sorted(range(len(weights)), key=lambda i: fracs[i], reverse=(remainder > 0))
-        for i in range(abs(remainder)):
-            idx = order[i % len(order)]
-            if remainder > 0:
-                floored[idx] += 1
-            elif floored[idx] > 1:
-                floored[idx] -= 1
-        return floored
+    grand_total = {
+        "City": "Grand Total", "Creative": "",
+        "Impressions": total_imp, "Clicks": total_clk,
+        "Click Rate (CTR)": ctr_reach
+    }
 
-    def _distribute_clicks(city_imps):
-        """Distribute total_clk across cities with CTR strictly 0.35%–0.56%."""
-        CTR_LO, CTR_HI = 0.0035, 0.0056
-        raw = [max(1, int(imp * random.uniform(CTR_LO, CTR_HI))) if imp >= 180 else 0
-               for imp in city_imps]
-        raw_sum = sum(raw)
-        if raw_sum == 0:
-            return [0] * len(city_imps)
-        clks = [max(1, int(round(r * total_clk / raw_sum))) if city_imps[i] >= 180 else 0
-                for i, r in enumerate(raw)]
-        drift = total_clk - sum(clks)
-        if drift:
-            eligible = [i for i, imp in enumerate(city_imps) if imp >= 180] or list(range(len(city_imps)))
-            if drift > 0:
-                clks[max(eligible, key=lambda i: city_imps[i])] += drift
-            else:
-                for _ in range(abs(drift)):
-                    valid = [i for i in eligible if clks[i] > 1]
-                    if not valid: break
-                    clks[max(valid, key=lambda i: clks[i])] -= 1
-        return clks
-
-    def _build_rows(city_names, city_imps, city_clks):
-        rows = [
-            {"City": city, "Impressions": imp, "Clicks": clk,
-             "Click Rate (CTR)": pct(clk, imp)}
-            for city, imp, clk in zip(city_names, city_imps, city_clks) if imp > 0
-        ]
-        rows.sort(key=lambda x: str(x["City"]).strip().lower())
-        return rows
-
-    grand_total = {"City": "Grand Total", "Impressions": total_imp,
-                   "Clicks": total_clk, "Click Rate (CTR)": ctr_reach}
-
-    # ── Phase 1: Line Item Matching ───────────────────────────────────────────
+    # -- Phase 1: Line Item Matching --
     li_col1 = detect_line_item_col(df1)
     li_col2 = detect_line_item_col(df2)
-
     info["debug"]["li_col1"] = li_col1
     info["debug"]["li_col2"] = li_col2
 
@@ -1113,18 +1216,18 @@ def build_sheet8_city(df1: pd.DataFrame, df2: pd.DataFrame,
 
         def get_tokens(s):
             s = str(s).lower()
-            # If format is "ID|Name", prioritize tokens from the Name part
             if "|" in s:
                 s = s.split("|")[-1]
             return set(re.findall(r'[a-z0-9]+', s))
 
         def matches_any_line_item(v2_raw):
             v2_tokens = get_tokens(str(v2_raw))
-            if not v2_tokens: return False
+            if not v2_tokens:
+                return False
             for i1 in items1:
                 i1_tokens = get_tokens(i1)
-                if not i1_tokens: continue
-                # Match if tokens overlap significantly or one is a subset
+                if not i1_tokens:
+                    continue
                 if i1_tokens.issubset(v2_tokens) or v2_tokens.issubset(i1_tokens):
                     return True
             return False
@@ -1133,175 +1236,191 @@ def build_sheet8_city(df1: pd.DataFrame, df2: pd.DataFrame,
         matched_df2 = df2[mask].copy()
         info["matched_line_items"] = int(mask.sum())
         if matched_df2.empty:
-            info["warnings"].append(
-                f"Line item matching found 0 rows. Falling back to all File 2 rows."
-            )
+            info["warnings"].append("Line item matching found 0 rows. Falling back to all File 2 rows.")
 
     if matched_df2.empty:
         matched_df2 = df2.copy()
         info["debug"]["fallback_used"] = True
 
-def build_sheet8_city(matched_df1: pd.DataFrame, matched_df2: pd.DataFrame, 
-                      total_imp: int, city_db_sheet: str, is_banner: bool = False):
-    """
-    Sheet 8: Distribution by City.
-    Logic:
-    1. Identify all cities from Input File 2.
-    2. Extract unique creatives associated with each city from File 2.
-    3. Look up related creatives from City DB Sheet.
-    4. Use weights from Input File 2.
-    5. Handle duplication to ensure valid distribution.
-    """
-    info = {"warnings": [], "debug": {}, "city_source": ""}
-    rows = []
-
-    # Detect necessary columns in File 1
-    creative_col1 = next((c for c in matched_df1.columns if "creative" in c.lower() and "id" not in c.lower()), matched_df1.columns[0])
-    
-    # Detect necessary columns in File 2
-    city_col = None
-    for col in matched_df2.columns:
-        if col.strip().lower() == "city": city_col = col; break
-    if not city_col:
-        for col in matched_df2.columns:
-            if "city" in col.strip().lower(): city_col = col; break
-    
-    weight_col2 = next((c for c in matched_df2.columns if "impression" in c.lower() or "weight" in c.lower()), None)
-    li_col2 = next((c for c in matched_df2.columns if "line item" in c.lower()), matched_df2.columns[0])
-
-    if city_col is None:
-        info["warnings"].append("No 'City' column detected in File 2.")
-        return [], None, info
-
-    # ── Phase 3: Load City DB Sheet ───────────────────────────────────────────
+    # -- Phase 2: Detect City column --
     db_cities_raw = load_city_db_sheet(city_db_sheet)
     if not db_cities_raw:
         db_cities_raw = load_city_db_sheet("Master Database")
         if db_cities_raw:
             info["warnings"].append(f"Sheet '{city_db_sheet}' not found. Using Master Database.")
+    db_lookup = {c["name"].strip().lower(): c for c in db_cities_raw}
+    db_city_names = {c["name"] for c in db_cities_raw if c.get("name")}
 
-    db_lookup = {c['name'].strip().lower(): c for c in db_cities_raw}
+    geo_col = _find_city_column(matched_df2, db_city_names)
+    geo_mode = "city"
+    if geo_col is None:
+        geo_col = _find_postcode_column(matched_df2)
+        geo_mode = "postcode" if geo_col is not None else "city"
+    if geo_col is None:
+        info["warnings"].append("No City or Zip Code column detected in File 2.")
+        return [], grand_total, info
+    if geo_mode == "postcode":
+        info["warnings"].append("File 2 has Zip Code / Postcode data but no City column. Geography sheet uses postcode values.")
+    info["debug"]["geo_col"] = str(geo_col)
+    info["debug"]["geo_mode"] = geo_mode
 
-    # ── Phase 2: Filter File 2 by Strict Matching (Steps 1-3) ────────────────
-    # Step 1: Extract unique Line Items from File 1
-    li_col1 = next((c for c in matched_df1.columns if "line item" in c.lower()), matched_df1.columns[0])
-    target_li_names = set(matched_df1[li_col1].dropna().astype(str).str.strip().unique())
-    
-    # Step 2: Normalize File 2 Line Items (Strip before |)
-    # Step 3: Filter rows that match Step 1 exactly
-    def normalize_and_match(val):
+    # -- Phase 3: Detect weight and line-item columns --
+    weight_col2 = next(
+        (c for c in matched_df2.columns if "impression" in str(c).lower() or "weight" in str(c).lower()),
+        None,
+    )
+    if weight_col2 is None:
+        numeric_candidates = [c for c in matched_df2.columns if pd.api.types.is_numeric_dtype(matched_df2[c])]
+        weight_col2 = numeric_candidates[0] if numeric_candidates else matched_df2.columns[-1]
+
+    li_col2_matched = next(
+        (c for c in matched_df2.columns if "line item" in str(c).lower()),
+        matched_df2.columns[0]
+    )
+
+    # -- Phase 4: Filter by line item & group by city --
+    li_col1_real = next(
+        (c for c in df1.columns if "line item" in str(c).lower()),
+        df1.columns[0]
+    )
+    target_li_names = {
+        str(v).strip()
+        for v in df1[li_col1_real].dropna().astype(str).unique()
+        if str(v).strip()
+    }
+
+    def normalize_li(val):
         val_str = str(val).strip()
         if "|" in val_str:
             val_str = val_str.split("|", 1)[1].strip()
-        return val_str in target_li_names
+        return val_str
 
-    mask = matched_df2[li_col2].apply(normalize_and_match)
-    filtered_df2 = matched_df2[mask].copy()
-    
-    # Debug info for the user
-    info["debug"]["target_line_items"] = list(target_li_names)
+    mask2 = matched_df2[li_col2_matched].apply(lambda v: normalize_li(v) in target_li_names)
+    filtered_df2 = matched_df2[mask2].copy()
+    info["debug"]["target_line_items"] = sorted(target_li_names)
     info["debug"]["filtered_rows"] = len(filtered_df2)
 
     if filtered_df2.empty:
         info["warnings"].append("No exact Line Item matches found after normalization. Using all data as fallback.")
         filtered_df2 = matched_df2.copy()
 
-    # ── Phase 4: Extract Unique Cities (Step 4) ───────────────────────────────
-    # Group by city to sum weights and collect unique creatives
-    city_groups = filtered_df2.groupby(city_col).agg({
-        weight_col2: 'sum',
-        li_col2: lambda x: sorted(list(set(x.dropna().astype(str))))
+    city_groups = filtered_df2.groupby(geo_col, dropna=False).agg({
+        weight_col2: "sum",
+        li_col2_matched: lambda x: sorted({
+            normalize_li(v) for v in x.dropna().astype(str) if normalize_li(v)
+        }),
     }).reset_index()
 
     input_cities_map = {}
     for _, row in city_groups.iterrows():
-        name = str(row[city_col]).strip()
-        if name and name.lower() not in ["nan", "none", ""]:
+        raw_name = row[geo_col]
+        if geo_mode == "postcode":
+            name = _normalize_postcode(raw_name)
+            display_name = f"Postcode {name}" if name else ""
+        else:
+            name = str(raw_name).strip()
+            display_name = name
+        if name and name.lower() not in {"nan", "none", ""}:
             input_cities_map[name.lower()] = {
-                "name": name,
+                "name": display_name,
                 "weight": safe_float(row[weight_col2]),
-                "creatives": row[li_col2]
+                "creatives": row[li_col2_matched],
             }
 
+    # -- Phase 5: Enrich with DB creatives --
     final_cities = []
-    # Filter against selected DB sheet(s)
-    for db_city in db_cities_raw:
-        cl = db_city['name'].lower()
-        if cl in input_cities_map:
-            inp = input_cities_map[cl]
-            final_cities.append({
-                "name": inp['name'],
-                "weight": inp['weight'],
-                "creatives": db_city['creatives'] if db_city['creatives'] else inp['creatives']
-            })
+    for city_key, inp in input_cities_map.items():
+        db_city = db_lookup.get(city_key) if geo_mode == "city" else None
+        final_cities.append({
+            "name": inp["name"],
+            "weight": inp["weight"],
+            "creatives": db_city["creatives"] if db_city and db_city.get("creatives") else inp["creatives"],
+        })
 
-    # ── Phase 5: Smart Capping & Supplementation (Banner Only) ────────────────
-    if is_banner:
-        # Cap at 60 cities to keep the report professional
+    # -- Phase 6: Banner capping / supplementation --
+    if is_banner and geo_mode == "city":
         if len(final_cities) > 60:
             final_cities.sort(key=lambda x: x["weight"], reverse=True)
             final_cities = final_cities[:60]
-            
-        # Supplement to reach at least 40 cities if needed
         if len(final_cities) < 40:
             existing_names = {c["name"].lower() for c in final_cities}
             master_cities = load_city_db_sheet("Master Database")
             added = 0
             for mc in master_cities:
-                if added >= (40 - len(final_cities)): break
+                if added >= (40 - len(final_cities)):
+                    break
                 if mc["name"].lower() not in existing_names:
                     final_cities.append({
                         "name": mc["name"],
                         "weight": mc["weight"],
-                        "creatives": mc["creatives"] if mc["creatives"] else ["General Creative"]
+                        "creatives": mc.get("creatives") or ["General Creative"],
                     })
                     added += 1
 
-    # Final sort for report presentation
     final_cities.sort(key=lambda x: x["weight"], reverse=True)
 
-    # ── Phase 6: Build Output Rows with Duplication ───────────────────────────
-    all_f1_creatives = sorted(list(set(matched_df1[creative_col1].dropna().astype(str))))
-    if not all_f1_creatives: all_f1_creatives = ["Default Creative"]
+    # -- Phase 7: Build city x creative rows --
+    creative_col1 = next(
+        (c for c in df1.columns if "creative" in str(c).lower() and "id" not in str(c).lower()),
+        df1.columns[0]
+    )
+    all_f1_creatives = sorted(list(set(df1[creative_col1].dropna().astype(str))))
+    if not all_f1_creatives:
+        all_f1_creatives = ["Default Creative"]
 
-    for city_info in final_cities:
-        city_name = city_info["name"]
-        city_weight = max(city_info["weight"], 1.0)
-        city_creatives = city_info["creatives"]
-        
-        if not city_creatives:
-            city_creatives = all_f1_creatives
-            
+    rows = []
+    for city_info_item in final_cities:
+        city_name = city_info_item["name"]
+        city_weight = max(city_info_item["weight"], 1.0)
+        city_creatives = city_info_item.get("creatives") or all_f1_creatives
         weight_per_cr = city_weight / len(city_creatives)
         for cr in city_creatives:
-            rows.append({
-                "City": city_name,
-                "Creative": cr,
-                "_weight": weight_per_cr
-            })
+            rows.append({"City": city_name, "Creative": cr, "_weight": weight_per_cr})
 
     if not rows:
-        # Absolute fallback if filtering left us with nothing
-        for idx, city_name in enumerate(["Sydney", "Melbourne", "Brisbane", "Perth"]):
+        for city_name in ["Sydney", "Melbourne", "Brisbane", "Perth"]:
             rows.append({"City": city_name, "Creative": all_f1_creatives[0], "_weight": 1.0})
 
-    # Convert to DF and scale
+    # -- Phase 8: Distribute impressions & clicks --
     df_rows = pd.DataFrame(rows)
     total_weight = df_rows["_weight"].sum()
     scaled_imps = _largest_remainder(df_rows["_weight"].tolist(), total_weight, total_imp)
     scaled_imps = deduplicate_preserving_sum(scaled_imps, gap=1)
-    
+
+    CTR_LO, CTR_HI = 0.0035, 0.0056
+    raw_clks = [
+        max(1, int(imp * random.uniform(CTR_LO, CTR_HI))) if imp >= 180 else 0
+        for imp in scaled_imps
+    ]
+    raw_sum = sum(raw_clks) or 1
+    scaled_clks = [
+        max(1, int(round(r * total_clk / raw_sum))) if scaled_imps[i] >= 180 else 0
+        for i, r in enumerate(raw_clks)
+    ]
+    drift = total_clk - sum(scaled_clks)
+    if drift > 0:
+        eligible = [i for i, imp in enumerate(scaled_imps) if imp >= 180] or list(range(len(scaled_imps)))
+        scaled_clks[max(eligible, key=lambda i: scaled_imps[i])] += drift
+    elif drift < 0:
+        for _ in range(abs(drift)):
+            eligible = [i for i, c in enumerate(scaled_clks) if c > 1]
+            if not eligible:
+                break
+            scaled_clks[max(eligible, key=lambda i: scaled_clks[i])] -= 1
+
     df_rows["Impressions"] = scaled_imps
-    df_rows["Clicks"]      = _distribute_clicks(scaled_imps)
-    
+    df_rows["Clicks"] = scaled_clks
     final_df = df_rows.drop(columns=["_weight"])
-    total_clk_sum = sum(df_rows["Clicks"])
+    total_clk_sum = int(df_rows["Clicks"].sum())
+
     total_row = {
-        "City": "Grand Total", "Creative": "", "Impressions": total_imp,
-        "Clicks": total_clk_sum, "Click Rate (CTR)": pct(total_clk_sum, total_imp)
+        "City": "Grand Total", "Creative": "",
+        "Impressions": total_imp, "Clicks": total_clk_sum,
+        "Click Rate (CTR)": pct(total_clk_sum, total_imp),
     }
-    
-    info["cities_found"] = len(df_rows["City"].unique())
+
+    info["cities_found"] = len(final_df["City"].drop_duplicates())
+    info["city_source"] = geo_mode
     return final_df.to_dict(orient="records"), total_row, info
 
 
@@ -1850,7 +1969,7 @@ def process_file(job_id: str, filepath1: Path, filepath2: Path | None,
         creative_info = {}
         s8 = s8t = s9 = s9t = None
         if df2 is not None:
-            s8, s8t, city_info     = build_sheet8_city(df1, df2, total_imp, city_sheet, is_banner=is_banner)
+            s8, s8t, city_info     = build_sheet8_city(df1, df2, total_imp, total_clk, ctr_reach, city_sheet, is_banner=is_banner)
             s9, s9t, creative_info = build_sheet9_creative(df1, df2, total_imp, total_clk)
 
         output_path = OUTPUT_DIR / f"report_{job_id}.xlsx"
@@ -2030,8 +2149,7 @@ def _norm_lang(s: str) -> str:
 
 def _load_db_master() -> pd.DataFrame:
     try:
-        df = pd.read_excel(APP_DB_FILE, sheet_name=_DB_MASTER_SHEET,
-                           header=_DB_HEADER_ROW - 1)
+        df = _df_from_cached(APP_DB_FILE, _DB_MASTER_SHEET, _file_mtime_ns(APP_DB_FILE), header=_DB_HEADER_ROW - 1)
     except Exception:
         return pd.DataFrame()
 
@@ -2064,21 +2182,13 @@ def _load_db_records() -> list[dict]:
 
 
 def list_db_languages() -> list[str]:
-    seen: set[str] = set()
-    order: list[str] = []
     try:
-        wb = openpyxl.load_workbook(APP_DB_FILE, read_only=True, data_only=True)
-        ws = wb[_DB_MASTER_SHEET] if _DB_MASTER_SHEET in wb.sheetnames else wb.active
-        header_row = next(ws.iter_rows(min_row=_DB_HEADER_ROW,
-                                        max_row=_DB_HEADER_ROW, values_only=True))
-        try:
-            lang_idx = header_row.index(_DB_LANG_COL)
-        except ValueError:
-            lang_idx = 2
-        for row in ws.iter_rows(min_row=_DB_HEADER_ROW + 1, values_only=True):
-            val = row[lang_idx] if lang_idx < len(row) else None
-            if val is None:
-                continue
+        df = _load_db_master()
+        if df.empty or _DB_LANG_COL not in df.columns:
+            return []
+        seen: set[str] = set()
+        order: list[str] = []
+        for val in df[_DB_LANG_COL].dropna().astype(str).tolist():
             s = str(val).strip()
             if not s or s.lower() == _DB_LANG_COL.lower():
                 continue
@@ -2087,10 +2197,9 @@ def list_db_languages() -> list[str]:
                 continue
             seen.add(key)
             order.append(s)
-        wb.close()
+        return order
     except Exception:
-        pass
-    return order
+        return []
 
 
 def list_languages_for_ui() -> list[str]:
@@ -2227,18 +2336,7 @@ def generate_html_report(job_id: str, sheets_data: dict) -> str:
     
     # Convert to JSON for embedding
     import json
-    tabs_json = json.dumps(tabs_js)
-    
-    # Encode logo image so the report is self-contained
-    logo_path = Path(__file__).resolve().parent / "assets" / "BILLION TAGS PNG white.png"
-    logo_data = ""
-    if logo_path.exists():
-        try:
-            logo_data = base64.b64encode(logo_path.read_bytes()).decode("ascii")
-        except Exception:
-            logo_data = ""
-    else:
-        print(f"[report] logo not found at {logo_path}")
+    tabs_json = json.dumps(tabs_js, ensure_ascii=False, separators=(",", ":"))
     
     # Determine initial tab
     initial_tab = 'reach' if 'reach' in tabs_js else list(tabs_js.keys())[0] if tabs_js else 'reach'
@@ -2335,7 +2433,7 @@ tbody tr:hover td{{background:#faf9fd}}
 <div class="dash">
   <aside class="side">
     <div class="brand">
-      <img src="data:image/png;base64,{logo_data}" alt="Billion Tags" style="height:28px;width:auto;object-fit:contain;filter:none;">
+      <img src="data:image/png;base64,{_HTML_LOGO_DATA}" alt="Billion Tags" style="height:28px;width:auto;object-fit:contain;filter:none;">
     </div>
     <div class="side-divider"></div>
     <div class="nav-section">
@@ -2518,150 +2616,6 @@ def city_sheets_route():
     return jsonify({"sheets": names})
 
 
-def build_sheet8_city(matched_df1: pd.DataFrame, matched_df2: pd.DataFrame,
-                      total_imp: int, city_db_sheet: str, is_banner: bool = False):
-    """
-    Deterministic city breakdown.
-    Keeps all unique cities from the filtered source rows.
-    City DB data is only used to enrich creatives when available.
-    """
-    info = {"warnings": [], "debug": {}, "city_source": ""}
-
-    if matched_df1.empty or matched_df2.empty:
-        return [], None, info
-
-    creative_col1 = next(
-        (c for c in matched_df1.columns if "creative" in c.lower() and "id" not in c.lower()),
-        matched_df1.columns[0],
-    )
-
-    city_col = None
-    for col in matched_df2.columns:
-        if str(col).strip().lower() == "city":
-            city_col = col
-            break
-    if city_col is None:
-        for col in matched_df2.columns:
-            if "city" in str(col).strip().lower():
-                city_col = col
-                break
-
-    if city_col is None:
-        info["warnings"].append("No 'City' column detected in File 2.")
-        return [], None, info
-
-    weight_col2 = next(
-        (c for c in matched_df2.columns if "impression" in c.lower() or "weight" in c.lower()),
-        None,
-    )
-    if weight_col2 is None:
-        numeric_candidates = [
-            c for c in matched_df2.columns
-            if pd.api.types.is_numeric_dtype(matched_df2[c])
-        ]
-        weight_col2 = numeric_candidates[0] if numeric_candidates else matched_df2.columns[-1]
-
-    li_col2 = next((c for c in matched_df2.columns if "line item" in c.lower()), matched_df2.columns[0])
-    li_col1 = next((c for c in matched_df1.columns if "line item" in c.lower()), matched_df1.columns[0])
-
-    db_cities_raw = load_city_db_sheet(city_db_sheet)
-    if not db_cities_raw:
-        db_cities_raw = load_city_db_sheet("Master Database")
-        if db_cities_raw:
-            info["warnings"].append(f"Sheet '{city_db_sheet}' not found. Using Master Database.")
-    db_lookup = {c["name"].strip().lower(): c for c in db_cities_raw}
-
-    target_li_names = {
-        str(v).strip()
-        for v in matched_df1[li_col1].dropna().astype(str).unique()
-        if str(v).strip()
-    }
-
-    def normalize_line_item(val: object) -> str:
-        val_str = str(val).strip()
-        if "|" in val_str:
-            val_str = val_str.split("|", 1)[1].strip()
-        return val_str
-
-    filtered_df2 = matched_df2[matched_df2[li_col2].apply(lambda v: normalize_line_item(v) in target_li_names)].copy()
-    info["debug"]["target_line_items"] = sorted(target_li_names)
-    info["debug"]["filtered_rows"] = len(filtered_df2)
-
-    if filtered_df2.empty:
-        info["warnings"].append("No exact Line Item matches found after normalization. Using all data as fallback.")
-        filtered_df2 = matched_df2.copy()
-
-    city_groups = filtered_df2.groupby(city_col, dropna=False).agg({
-        weight_col2: "sum",
-        li_col2: lambda x: sorted({
-            normalize_line_item(v)
-            for v in x.dropna().astype(str)
-            if normalize_line_item(v)
-        }),
-    }).reset_index()
-
-    input_cities_map = {}
-    for _, row in city_groups.iterrows():
-        name = str(row[city_col]).strip()
-        if name and name.lower() not in {"nan", "none", ""}:
-            input_cities_map[name.lower()] = {
-                "name": name,
-                "weight": safe_float(row[weight_col2]),
-                "creatives": row[li_col2],
-            }
-
-    final_cities = []
-    for city_key, inp in input_cities_map.items():
-        db_city = db_lookup.get(city_key)
-        final_cities.append({
-            "name": inp["name"],
-            "weight": inp["weight"],
-            "creatives": db_city["creatives"] if db_city and db_city["creatives"] else inp["creatives"],
-        })
-
-    final_cities.sort(key=lambda x: x["weight"], reverse=True)
-
-    all_f1_creatives = sorted(list(set(matched_df1[creative_col1].dropna().astype(str))))
-    if not all_f1_creatives:
-        all_f1_creatives = ["Default Creative"]
-
-    rows = []
-    for city_info in final_cities:
-        city_name = city_info["name"]
-        city_weight = max(city_info["weight"], 1.0)
-        city_creatives = city_info["creatives"] or all_f1_creatives
-        weight_per_cr = city_weight / len(city_creatives)
-        for cr in city_creatives:
-            rows.append({
-                "City": city_name,
-                "Creative": cr,
-                "_weight": weight_per_cr,
-            })
-
-    if not rows:
-        for city_name in ["Sydney", "Melbourne", "Brisbane", "Perth"]:
-            rows.append({"City": city_name, "Creative": all_f1_creatives[0], "_weight": 1.0})
-
-    df_rows = pd.DataFrame(rows)
-    total_weight = df_rows["_weight"].sum()
-    scaled_imps = _largest_remainder(df_rows["_weight"].tolist(), total_weight, total_imp)
-
-    df_rows["Impressions"] = scaled_imps
-    df_rows["Clicks"] = _distribute_clicks(scaled_imps)
-
-    final_df = df_rows.drop(columns=["_weight"])
-    total_clk_sum = int(df_rows["Clicks"].sum())
-    total_row = {
-        "City": "Grand Total",
-        "Creative": "",
-        "Impressions": total_imp,
-        "Clicks": total_clk_sum,
-        "Click Rate (CTR)": pct(total_clk_sum, total_imp),
-    }
-
-    info["cities_found"] = len(final_df["City"].drop_duplicates())
-    info["city_source"] = "input"
-    return final_df.to_dict(orient="records"), total_row, info
 
 
 @app.route("/upload", methods=["POST", "OPTIONS"])
