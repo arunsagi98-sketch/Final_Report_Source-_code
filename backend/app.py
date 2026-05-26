@@ -134,7 +134,7 @@ def _align(horizontal: str) -> Alignment:
 
 def style_header(ws, row, num_cols):
     fill = PatternFill("solid", fgColor=HEADER_BG)
-    font = Font(bold=True, color=HEADER_FG, size=11, name="Calibri")
+    font = Font(bold=True, color=HEADER_FG, size=10, name="Calibri")
     for c in range(1, num_cols + 1):
         cell = ws.cell(row=row, column=c)
         cell.fill = fill
@@ -152,7 +152,7 @@ def style_data(ws, start_row, end_row, num_cols):
 
 def style_total_row(ws, row, num_cols):
     fill = PatternFill("solid", fgColor=TOTAL_BG)
-    font = Font(bold=True, color=TOTAL_FG, size=11, name="Calibri")
+    font = Font(bold=True, color=TOTAL_FG, size=10, name="Calibri")
     for c in range(1, num_cols + 1):
         cell = ws.cell(row=row, column=c)
         cell.fill = fill
@@ -258,6 +258,7 @@ def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=Non
             cell = ws.cell(row=r_idx, column=c_idx)
             raw_val = row.get(h, "")
             _assign(cell, raw_val, h_name=h, row_idx=r_idx)
+            cell.font = Font(size=10, name="Calibri")
             if c_idx == 1:
                 target = "left"
             elif body_alignments is not None:
@@ -1403,7 +1404,7 @@ def build_sheet8_city(df1, df2,
                     })
                     added += 1
 
-    final_cities.sort(key=lambda x: x["weight"], reverse=True)
+    final_cities.sort(key=lambda x: str(x["name"]).strip().lower())
 
     # -- Phase 7: Build city x creative rows --
     creative_col1 = next(
@@ -1456,7 +1457,11 @@ def build_sheet8_city(df1, df2,
 
     df_rows["Impressions"] = scaled_imps
     df_rows["Clicks"] = scaled_clks
-    final_df = df_rows.drop(columns=["_weight"])
+    final_df = df_rows.drop(columns=["_weight"]).sort_values(
+        by=["City", "Creative"],
+        key=lambda col: col.astype(str).str.lower(),
+        kind="stable",
+    ).reset_index(drop=True)
     total_clk_sum = int(df_rows["Clicks"].sum())
 
     total_row = {
@@ -1810,6 +1815,7 @@ def build_sheet10_apps(
     CTR_OTHER_HI = 0.0085  # 0.85%
     CTR_MIN = CTR_OTHER_LO
     CTR_MAX = CTR_OTHER_HI
+    CTR_HARD_MAX = 0.0099  # 0.99%
 
     raw_clks: list[float] = [0.0] * n
     for idx, imp in enumerate(app_imps):
@@ -1829,6 +1835,29 @@ def build_sheet10_apps(
             app_clks[i] = 1
 
     # Drift correction — respect CTR_MAX hard cap
+    def _max_clicks_for_imp(imp: int) -> int:
+        return max(0, int(imp * CTR_HARD_MAX))
+
+    def _cap_app_url_clicks(clicks: list[int]) -> list[int]:
+        overflow = 0
+        for i, imp in enumerate(app_imps):
+            cap = _max_clicks_for_imp(int(imp))
+            if clicks[i] > cap:
+                overflow += clicks[i] - cap
+                clicks[i] = cap
+        if overflow <= 0:
+            return clicks
+
+        eligible = [i for i, imp in enumerate(app_imps) if imp >= 180 and clicks[i] < _max_clicks_for_imp(int(imp))]
+        while overflow > 0 and eligible:
+            tgt = max(eligible, key=lambda i: (_max_clicks_for_imp(int(app_imps[i])) - clicks[i], app_imps[i]))
+            clicks[tgt] += 1
+            overflow -= 1
+            if clicks[tgt] >= _max_clicks_for_imp(int(app_imps[tgt])):
+                eligible = [i for i in eligible if i != tgt]
+        return clicks
+
+    app_clks = _cap_app_url_clicks(app_clks)
     drift = total_clk - sum(app_clks)
     if drift:
         eligible = list(range(n)); random.shuffle(eligible)
@@ -1836,7 +1865,7 @@ def build_sheet10_apps(
             for _ in range(drift):
                 tgt = next(
                     (i for i in eligible
-                     if app_imps[i] > 0 and (app_clks[i] + 1) / app_imps[i] <= CTR_MAX),
+                     if app_imps[i] > 0 and (app_clks[i] + 1) / app_imps[i] <= CTR_HARD_MAX),
                     max(eligible, key=lambda i: app_imps[i])
                 )
                 app_clks[tgt] += 1
@@ -1855,11 +1884,12 @@ def build_sheet10_apps(
                     while app_clks[idx] > 1 and to_remove:
                         app_clks[idx] -= 1; to_remove -= 1
 
+    app_clks = _cap_app_url_clicks(app_clks)
+
     rows: list[dict] = [
         {"App/URL": url, "Impressions": imp, "Clicks": clk, "Click Rate (CTR)": pct(clk, imp)}
         for url, imp, clk in zip(all_apps, app_imps, app_clks)
     ]
-    rows.sort(key=lambda x: str(x["App/URL"]).strip().lower())
     rows.sort(key=lambda x: x["Impressions"], reverse=True)
 
     total_row: dict = {
