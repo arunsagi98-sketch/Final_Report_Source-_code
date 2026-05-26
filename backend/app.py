@@ -171,10 +171,11 @@ def auto_fit(ws):
             width = max(width, len(str(cell.value or "")))
         ws.column_dimensions[get_column_letter(col[0].column)].width = min(width + 4, 50)
 
-def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=None, total_alignments=None):
+def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=None, total_alignments=None, body_alignments=None):
     ws.sheet_view.showGridLines = True
     formulas = formulas or {}
     alignments = alignments or {}
+    body_alignments = body_alignments or None
     col_map = {h: get_column_letter(i) for i, h in enumerate(headers, 1)}
     numeric_headers = {
         "Impressions", "Clicks", "Reach", "Frequency",
@@ -234,7 +235,7 @@ def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=Non
             if h_name in ["CTR", "Click Rate (CTR)", "Viewability", "VCR (Completion Rate)"]:
                 cell.number_format = "0.00%"
             elif h_name in numeric_headers:
-                cell.number_format = "#,##0"
+                cell.number_format = "0"
             return
         if isinstance(val, str) and val.strip().endswith("%"):
             try:
@@ -245,11 +246,11 @@ def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=Non
         elif isinstance(val, str) and val.lstrip('-').isdigit():
             cell.value = int(val)
             if h_name in numeric_headers:
-                cell.number_format = "#,##0"
+                cell.number_format = "0"
         else:
             cell.value = val
             if h_name in numeric_headers and isinstance(val, (int, float)):
-                cell.number_format = "#,##0"
+                cell.number_format = "0"
 
     # Write data rows
     for r_idx, row in enumerate(rows, 2):
@@ -259,6 +260,8 @@ def write_sheet(ws, headers, rows, total_row=None, formulas=None, alignments=Non
             _assign(cell, raw_val, h_name=h, row_idx=r_idx)
             if c_idx == 1:
                 target = "left"
+            elif body_alignments is not None:
+                target = get_align_str(h, c_idx, body_alignments)
             elif h in formulas or h in numeric_headers or _is_numeric_like(raw_val):
                 target = "right"
             else:
@@ -665,6 +668,11 @@ def _clean_li2(val: str) -> str:
 
 def _normalize_city(val: str) -> str:
     return re.sub(r'\s+', ' ', str(val).strip()).title()
+
+
+def _is_unknown_geo_value(val: object) -> bool:
+    s = re.sub(r'\s+', ' ', str(val or "").strip()).lower()
+    return s in {"", "nan", "none", "unknown", "n/a", "na", "<na>", "null"}
 
 
 def _infer_app_sheet_name_from_df(df1: pd.DataFrame | None, selected_sheet: str = "") -> str:
@@ -1358,7 +1366,7 @@ def build_sheet8_city(df1, df2,
         else:
             name = str(raw_name).strip()
             display_name = name
-        if name and name.lower() not in {"nan", "none", ""}:
+        if name and not _is_unknown_geo_value(name):
             input_cities_map[name.lower()] = {
                 "name": display_name,
                 "weight": safe_float(row[weight_col2]),
@@ -2037,6 +2045,15 @@ def process_file(job_id: str, filepath1: Path, filepath2: Path | None,
                 "Click Rate (CTR)": "{Clicks}/{Impressions}",
                 "Viewability": "{Viewable Impressions}/{Measurable Impressions}",
             }
+            align2 = {
+               "Date":                          "center",
+               "Impressions":                   "center",
+               "Clicks":                        "center",
+               "Click Rate (CTR)":              "center",
+               "Viewable Impressions":          "center",
+               "Measurable Impressions":        "center",
+               "Viewability":                   "center",
+            }
         else:
             h2 = ["Date","Impressions","Clicks","Click Rate (CTR)","Viewable Impressions",
                   "Measurable Impressions","Viewability","Sum of Starts (Video)",
@@ -2046,9 +2063,29 @@ def process_file(job_id: str, filepath1: Path, filepath2: Path | None,
                 "Viewability": "{Viewable Impressions}/{Measurable Impressions}",
                 "VCR (Completion Rate)": "{Sum of Complete Views (Video)}/{Sum of Starts (Video)}"
             }
-        t2_align = {h: "right" for h in h2}
-        t2_align[h2[0]] = "left"
-        write_sheet(ws2, h2, s2, s2t, formulas=f2, alignments="center", total_alignments=t2_align)
+            align2 = {
+               "Date":                          "center",
+               "Impressions":                   "center",
+               "Clicks":                        "center",
+               "Click Rate (CTR)":              "center",
+               "Viewable Impressions":          "center",
+               "Measurable Impressions":        "center",
+               "Viewability":                   "center",
+               "Sum of Starts (Video)":         "center",
+               "Sum of Complete Views (Video)": "center",
+               "VCR (Completion Rate)":         "center",
+            }
+        align2_total = {h: ("left" if i == 0 else "right") for i, h in enumerate(h2)}
+        write_sheet(
+            ws2,
+            h2,
+            s2,
+            s2t,
+            formulas=f2,
+            alignments=align2,
+            total_alignments=align2_total,
+            body_alignments=align2,
+        )
 
         # CHANGED: pass selected_sheet to build_sheet10_apps
         ws10 = wb.create_sheet("APP URL")
