@@ -134,7 +134,7 @@ def _align(horizontal: str) -> Alignment:
 
 def style_header(ws, row, num_cols):
     fill = PatternFill("solid", fgColor=HEADER_BG)
-    font = Font(bold=True, color=HEADER_FG, size=10, name="Calibri")
+    font = Font(bold=True, color=HEADER_FG, size=11, name="Calibri")
     for c in range(1, num_cols + 1):
         cell = ws.cell(row=row, column=c)
         cell.fill = fill
@@ -2662,10 +2662,32 @@ def db_sheets():
     })
 
 
+# Expose App/URL DB sheet names for language dropdown (API prefix)
+@app.route("/api/db-sheets", methods=["GET"])
+def api_db_sheets():
+    names = get_db_sheet_names()
+    return jsonify({
+        "sheets": names,
+        "db_sheets": names,
+        "data": names,
+    })
+
+
 # Expose City DB sheet names for city dropdown
 @app.route("/city-sheets", methods=["GET"])
 def city_sheets_route():
-    names = get_city_db_sheet_names()
+    names = refdb.get_city_sheet_names()
+    return jsonify({
+        "sheets": names,
+        "city_sheets": names,
+        "data": names,
+    })
+
+
+# Expose City DB sheet names for city dropdown (API prefix)
+@app.route("/api/city-sheets", methods=["GET"])
+def api_city_sheets():
+    names = refdb.get_city_sheet_names()
     return jsonify({
         "sheets": names,
         "city_sheets": names,
