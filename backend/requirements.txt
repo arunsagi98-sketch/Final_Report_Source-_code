@@ -1,0 +1,8 @@
+Flask==2.3.7
+flask-cors==4.0.0
+openpyxl==3.10.10
+pandas==2.0.3
+Werkzeug==2.3.7
+psycopg2-binary==2.9.7
+gunicorn==21.2.0
+python-dotenv==1.0.0
